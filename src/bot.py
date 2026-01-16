@@ -129,7 +129,7 @@ class DiploBot:
             # ============================================================
             # تفعيل الحجز الحقيقي (احذف الهاش أدناه)
             # ============================================================
-            # page.locator("input[type='submit'][name^='action:appointment_add']").click()
+             page.locator("input[type='submit'][name^='action:appointment_add']").click()
             
             return True
 
