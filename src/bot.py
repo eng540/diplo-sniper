@@ -35,7 +35,7 @@ class DiploBot:
 
     def handle_captcha(self, page, max_retries=3):
         """
-        التعامل مع الكابتشا باستخدام طريقة Enter المثبتة فعاليتها
+        استراتيجية هجينة: تحاول النقر أولاً، ثم Enter كخطة بديلة
         """
         for attempt in range(max_retries):
             try:
@@ -53,21 +53,39 @@ class DiploBot:
                     
                     page.fill("input[name='captchaText']", code)
                     
-                    # العودة للطريقة التي نجحت: ضغط Enter
-                    print("   -> Pressing Enter...")
-                    page.keyboard.press("Enter")
+                    # المحاولة الأولى: النقر على الزر
+                    submit_btn = page.locator("input[type='submit'][name^='action:appointment']").first
+                    if submit_btn.is_visible():
+                        print("   -> Clicking Submit Button...")
+                        submit_btn.click()
+                    else:
+                        print("   -> Button not found, trying Enter...")
+                        page.keyboard.press("Enter")
                     
                     try:
-                        # انتظار اختفاء حقل الكابتشا كدليل على النجاح
-                        page.wait_for_selector("input[name='captchaText']", state="hidden", timeout=8000)
-                        print("✅ Captcha passed (Page changed).")
-                        return True
+                        page.wait_for_load_state("networkidle", timeout=8000)
                     except:
-                        print("❌ Captcha failed (Page didn't change). Retrying...")
-                        continue 
+                        pass
+
+                    # التحقق من النجاح
+                    if page.locator("input[name='captchaText']").is_visible():
+                        print("❌ Captcha failed (Page didn't change). Trying Enter fallback...")
+                        # المحاولة الثانية الفورية: ضغط Enter
+                        page.keyboard.press("Enter")
+                        page.wait_for_timeout(4000)
+                        
+                        if page.locator("input[name='captchaText']").is_visible():
+                            continue # فشلت المحاولتين، نعيد الدورة
+                        else:
+                            print("✅ Captcha passed (Enter fallback worked).")
+                            return True
+                    else:
+                        print("✅ Captcha passed.")
+                        return True
 
             except Exception as e:
                 print(f"⚠️ Captcha Error: {e}")
+                traceback.print_exc()
         
         print("❌ Failed to solve captcha after retries.")
         return False
@@ -161,7 +179,15 @@ class DiploBot:
             page.screenshot(path=f"form_filled_{ts}.png")
             send_photo(f"form_filled_{ts}.png", caption="🚨 Submitting Form...")
             
-            # 5. الإرسال النهائي (Enter)
+            # 5. الإرسال النهائي (محاولة مزدوجة)
+            submit_btn = page.locator("input[type='submit'][name^='action:appointment_add']")
+            if submit_btn.is_visible():
+                submit_btn.click()
+            else:
+                page.keyboard.press("Enter")
+            
+            # احتياطياً: ضغط Enter أيضاً
+            page.wait_for_timeout(1000)
             page.keyboard.press("Enter")
             
             page.wait_for_timeout(5000)
@@ -191,7 +217,7 @@ class DiploBot:
             page = context.new_page()
             
             print(f"🚀 Sniper Active. Target: {Config.TARGET_URL}")
-            send_alert("🚀 Diplo Sniper V4 (Stable Enter) Started...")
+            send_alert("🚀 Diplo Sniper V5 (Hybrid Mode) Started...")
             
             while True:
                 month_urls = self.get_month_urls()
