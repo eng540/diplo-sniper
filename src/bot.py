@@ -1,5 +1,6 @@
 import time
 import random
+import datetime
 from playwright.sync_api import sync_playwright
 from .config import Config
 from .captcha import CaptchaSolver
@@ -8,124 +9,179 @@ from .notifier import send_alert
 class DiploBot:
     def __init__(self):
         self.solver = CaptchaSolver()
+        # نستخدم الإنجليزية لكن الكود سيدعم الألمانية أيضاً
+        self.base_url_template = Config.TARGET_URL + "&request_locale=en"
 
-    def handle_captcha_if_present(self, page):
+    def get_month_urls(self):
+        """توليد روابط للأشهر الـ 6 القادمة"""
+        urls = []
+        today = datetime.date.today()
+        base_clean = self.base_url_template.split("&dateStr=")[0]
+        for i in range(6): 
+            future_month = (today.month + i - 1) % 12 + 1
+            future_year = today.year + ((today.month + i - 1) // 12)
+            date_str = f"15.{future_month:02d}.{future_year}"
+            urls.append(f"{base_clean}&dateStr={date_str}")
+        return urls
+
+    def handle_captcha(self, page):
+        """دالة الكابتشا الموحدة"""
+        try:
+            if page.locator("input[name='captchaText']").is_visible():
+                print("🚧 [Captcha] Processing...")
+                captcha_element = page.locator("captcha > div").first
+                if captcha_element.is_visible():
+                    page.wait_for_timeout(300)
+                    captcha_bytes = captcha_element.screenshot()
+                    code = self.solver.solve(captcha_bytes)
+                    print(f"🧩 Decoded: {code}")
+                    page.fill("input[name='captchaText']", code)
+                    
+                    submit_btn = page.locator("input[type='submit'][name^='action:appointment']").first
+                    if submit_btn.is_visible():
+                        submit_btn.click()
+                        page.wait_for_load_state("networkidle")
+                        return True
+        except Exception as e:
+            print(f"⚠️ Captcha Error: {e}")
+        return False
+
+    def smart_fill_by_label(self, page, keywords, value):
         """
-        دالة ذكية تفحص الصفحة الحالية، إذا وجدت كابتشا تقوم بحلها وتضغط استمرار.
-        تعيد True إذا تم حل كابتشا، و False إذا لم تجد شيئاً.
+        الخوارزمية الذكية: البحث عن الحقل عبر ربط Label -> ID
         """
         try:
-            # نبحث عن حقل إدخال الكابتشا (بناءً على الصورة عادة يكون اسمه captcha)
-            # سنبحث عن أي حقل إدخال يقع بالقرب من صورة الكابتشا
-            if page.locator("input[name='captcha']").is_visible() or page.locator("#captcha").is_visible():
-                print("🚧 [Captcha Detected] Found a captcha checkpoint!")
+            for word in keywords:
+                # نبحث عن Label يحتوي على الكلمة المفتاحية
+                # نستخدم XPath للبحث عن نص جزئي داخل Label
+                label_locator = page.locator(f"//label[contains(text(), '{word}')]")
                 
-                # 1. تحديد مكان الصورة
-                # في موقع ديبلو، الصورة عادة تكون داخل div معين.
-                # سنحاول التقاط الصورة بدقة
-                captcha_element = page.locator("captcha_div_selector_here img").first # يحتاج تحديث السلكتور
-                
-                # إذا لم نجد الصورة بالسلكتور الدقيق، نأخذ لقطة لأي صورة في منطقة الكابتشا
-                if not captcha_element.is_visible():
-                    captcha_element = page.locator("img[src*='captcha']").first
-
-                # 2. التقاط الصورة وحلها
-                captcha_bytes = captcha_element.screenshot()
-                code = self.solver.solve(captcha_bytes)
-                print(f"🧩 Solution attempt: {code}")
-
-                # 3. الكتابة في الحقل
-                # نحاول ملء الحقل سواء كان اسمه captcha أو id الخاص به captcha
-                try:
-                    page.fill("input[name='captcha']", code)
-                except:
-                    page.fill("#captcha", code)
-
-                # 4. الضغط على زر "Weiter" (استمرار)
-                # نبحث عن زر يحتوي على كلمة Weiter
-                page.click("input[value='Weiter'], button:has-text('Weiter')")
-                
-                # انتظار التحميل بعد الضغط
-                page.wait_for_load_state("networkidle")
-                return True
+                if label_locator.count() > 0:
+                    # نأخذ أول تطابق
+                    first_label = label_locator.first
+                    # نستخرج قيمة 'for' التي تشير لـ ID الحقل
+                    target_id = first_label.get_attribute("for")
+                    
+                    if target_id:
+                        print(f"   -> Linked '{word}' to Input ID: #{target_id}")
+                        # نملأ الحقل المرتبط بهذا ID
+                        page.fill(f"#{target_id}", value)
+                        return True
+            return False
         except Exception as e:
-            print(f"⚠️ Captcha check warning: {e}")
-        
-        return False
+            print(f"   -> Smart fill error for {keywords}: {e}")
+            return False
+
+    def fill_booking_form(self, page):
+        print("📝 Filling Booking Form (Label-ID Strategy)...")
+        try:
+            # 1. الحقول الثابتة (لا تتغير أبداً)
+            page.fill("input[name='lastname']", Config.LAST_NAME)
+            page.fill("input[name='firstname']", Config.FIRST_NAME)
+            page.fill("input[name='email']", Config.EMAIL)
+            
+            # تكرار الإيميل (نتعامل معه بمرونة الاسم)
+            if page.locator("input[name='emailrepeat']").is_visible():
+                page.fill("input[name='emailrepeat']", Config.EMAIL)
+            elif page.locator("input[name='emailRepeat']").is_visible():
+                page.fill("input[name='emailRepeat']", Config.EMAIL)
+
+            # 2. الحقول الديناميكية (باستخدام خوارزمية Label -> ID)
+            
+            # --- الجواز (Passport) ---
+            passport_keywords = ["Passport", "Reisepass", "Passeport"]
+            if not self.smart_fill_by_label(page, passport_keywords, Config.PASSPORT):
+                # خطة بديلة: البحث بالاسم القديم
+                print("   ⚠️ Label search failed for Passport, trying fallback...")
+                if page.locator("input[name='passportNumber']").is_visible():
+                    page.fill("input[name='passportNumber']", Config.PASSPORT)
+                elif page.locator("input[name='fields[0].content']").is_visible():
+                    page.fill("input[name='fields[0].content']", Config.PASSPORT)
+
+            # --- الهاتف (Phone) ---
+            phone_keywords = ["Phone", "Telephone", "Telefon", "Mobile", "Handy"]
+            if not self.smart_fill_by_label(page, phone_keywords, Config.PHONE):
+                print("   ⚠️ Label search failed for Phone, trying fallback...")
+                if page.locator("input[name='phone']").is_visible():
+                    page.fill("input[name='phone']", Config.PHONE)
+                elif page.locator("input[name='fields[1].content']").is_visible():
+                    page.fill("input[name='fields[1].content']", Config.PHONE)
+
+            # 3. القوائم المنسدلة (Dropdowns)
+            # نختار الخيار الثاني دائماً (index 1) لتجاوز الخيار الفارغ
+            selects = page.locator("select").all()
+            for select in selects:
+                if select.is_visible():
+                    try:
+                        select.select_option(index=1)
+                        print("   -> Dropdown option selected.")
+                    except:
+                        pass
+
+            # 4. كابتشا الإرسال
+            self.handle_captcha(page)
+            
+            # 5. الإرسال
+            print("🚨 FORM READY! Saving screenshot...")
+            page.screenshot(path="final_filled.png")
+            send_alert("🚨 FORM FILLED! Check 'final_filled.png'.")
+            
+            # ============================================================
+            # تفعيل الحجز الحقيقي (احذف الهاش أدناه)
+            # ============================================================
+            # page.locator("input[type='submit'][name^='action:appointment_add']").click()
+            
+            return True
+
+        except Exception as e:
+            print(f"❌ Form Error: {e}")
+            return False
 
     def run(self):
         with sync_playwright() as p:
-            # إعدادات المتصفح
+            # تشغيل المتصفح
             browser = p.chromium.launch(headless=True, args=["--no-sandbox", "--disable-gpu"])
             context = browser.new_context(
                 user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36"
             )
             page = context.new_page()
-
-            print(f"🚀 Starting Sniper on: {Config.TARGET_URL}")
+            
+            print(f"🚀 Sniper Active. Target: {Config.TARGET_URL}")
             
             while True:
-                try:
-                    # 1. الذهاب للرابط
-                    page.goto(Config.TARGET_URL, timeout=60000)
-                    
-                    # --- نقطة تفتيش 1: كابتشا الدخول ---
-                    self.handle_captcha_if_present(page)
-
-                    # 2. فحص محتوى الصفحة (هل نحن في التقويم؟)
-                    content = page.content()
-                    
-                    # التحقق من وجود رسالة "لا توجد مواعيد"
-                    if "No appointments" in content or "keine Termine" in content:
-                        print("💤 No slots. Sleeping...")
-                        # انتظار عشوائي لتجنب الحظر
-                        time.sleep(random.randint(40, 80))
-                        continue
-                    
-                    # --- إذا وصلنا هنا، يعني الصفحة تغيرت (احتمال وجود موعد) ---
-                    print("🔥 POTENTIAL SLOT DETECTED!")
-                    
-                    # البحث عن رابط الحجز (يختلف السلكتور حسب الصفحة)
-                    # نبحث عن رابط يحتوي على كلمة حجز أو تاريخ
-                    slot_link = page.locator("a:has-text('Book'), a:has-text('Termin buchen')").first
-                    
-                    if slot_link.is_visible():
-                        slot_link.click()
-                        print("point_right: Clicked slot!")
+                month_urls = self.get_month_urls()
+                for url in month_urls:
+                    try:
+                        print(f"🔎 Scanning: {url.split('dateStr=')[1]}")
+                        page.goto(url, timeout=30000)
                         
-                        # --- نقطة تفتيش 2: كابتشا ما بعد اختيار الموعد (إن وجدت) ---
-                        self.handle_captcha_if_present(page)
-
-                        # 3. تعبئة النموذج
-                        print("📝 Filling form...")
-                        page.wait_for_selector("#lastname", timeout=5000)
+                        self.handle_captcha(page)
                         
-                        page.fill("#lastname", Config.LAST_NAME)
-                        page.fill("#firstname", Config.FIRST_NAME)
-                        page.fill("#email", Config.EMAIL)
-                        # قد يطلب تكرار الإيميل
-                        if page.locator("#emailRepeat").is_visible():
-                            page.fill("#emailRepeat", Config.EMAIL)
-                        page.fill("#passportNumber", Config.PASSPORT)
-                        page.fill("#phone", Config.PHONE)
-
-                        # --- نقطة تفتيش 3: كابتشا الإرسال النهائي ---
-                        # (أحياناً تكون الكابتشا في نفس صفحة البيانات في الأسفل)
-                        self.handle_captcha_if_present(page)
-
-                        # إرسال التنبيه (مع لقطة شاشة قبل الضغط النهائي)
-                        page.screenshot(path="pre_submit.png")
-                        send_alert("🚨 Form Filled! Check server for pre_submit.png")
+                        content = page.content()
+                        if "Unfortunately, there are no appointments" in content or "keine Termine" in content:
+                            time.sleep(random.uniform(1, 2)) 
+                            continue
                         
-                        # الضغط على زر الحجز النهائي (Submit)
-                        # page.click("input[type='submit']") 
-                        
-                        print("✅ Process Finished. Check Telegram.")
-                        break
-                    else:
-                        print("🤔 Page changed but no slot link found. Retrying...")
-                        self.handle_captcha_if_present(page) # ربما ظهرت كابتشا منعت ظهور الرابط
-
-                except Exception as e:
-                    print(f"❌ Error in loop: {e}")
-                    time.sleep(5)
+                        # البحث عن رابط اليوم
+                        day_link = page.locator("a.arrow[href*='appointment_showDay']").first
+                        if day_link.is_visible():
+                            print("🔥 DAY FOUND!")
+                            day_link.click()
+                            self.handle_captcha(page)
+                            
+                            # البحث عن رابط الوقت
+                            time_link = page.locator("a.arrow[href*='appointment_showForm']").first
+                            if time_link.is_visible():
+                                print("⏰ TIME FOUND!")
+                                time_link.click()
+                                self.handle_captcha(page)
+                                
+                                if self.fill_booking_form(page):
+                                    print("✅ DONE.")
+                                    return
+                    except Exception as e:
+                        print(f"⚠️ Error: {e}")
+                        time.sleep(5)
+                
+                print("💤 Cycle done. Sleeping 60s...")
+                time.sleep(60)
