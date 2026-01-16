@@ -2,6 +2,7 @@ import time
 import random
 import datetime
 import os
+import traceback
 from playwright.sync_api import sync_playwright
 from .config import Config
 from .captcha import CaptchaSolver
@@ -11,7 +12,10 @@ class DiploBot:
     def __init__(self):
         self.solver = CaptchaSolver()
         self.base_url_template = Config.TARGET_URL + "&request_locale=en"
-        self.debug_photo_sent = False 
+        self.debug_photo_sent = False
+
+    def get_timestamp(self):
+        return datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
 
     def get_month_urls(self):
         urls = []
@@ -29,26 +33,58 @@ class DiploBot:
             urls.append(full_url)
         return urls
 
-    def handle_captcha(self, page):
-        try:
-            if page.locator("input[name='captchaText']").is_visible():
-                print("🚧 [Captcha] Found. Solving...")
+    def handle_captcha(self, page, max_retries=5):
+        """استراتيجية ذكية: فلترة الطول + Enter"""
+        for attempt in range(max_retries):
+            try:
+                if not page.locator("input[name='captchaText']").is_visible():
+                    return True 
+
+                print(f"🚧 [Captcha] Attempt {attempt+1}/{max_retries}...")
                 captcha_element = page.locator("captcha > div").first
+                
                 if captcha_element.is_visible():
                     page.wait_for_timeout(1000)
                     captcha_bytes = captcha_element.screenshot()
                     code = self.solver.solve(captcha_bytes)
-                    print(f"🧩 Decoded: {code}")
                     
-                    # الكتابة ثم ضغط Enter
+                    # --- فلترة الطول (أهم تحديث) ---
+                    if len(code) != 6:
+                        print(f"⚠️ Invalid length ({len(code)}). Refreshing...")
+                        # محاولة تحديث الصورة
+                        refresh_btn = page.locator("input[name^='action:appointment_refreshCaptcha']").first
+                        if refresh_btn.is_visible():
+                            refresh_btn.click()
+                            page.wait_for_timeout(2000)
+                        else:
+                            # إذا لم يوجد زر تحديث، نعيد تحميل الصفحة
+                            page.reload()
+                        continue
+                    
+                    print(f"🧩 Decoded: {code}")
                     page.fill("input[name='captchaText']", code)
+                    
+                    # استخدام Enter (الطريقة الموثوقة)
+                    print("   -> Pressing Enter...")
                     page.keyboard.press("Enter")
                     
-                    print("⏳ Enter pressed. Waiting...")
-                    time.sleep(5) # انتظار التحميل
-                    return True
-        except Exception as e:
-            print(f"⚠️ Captcha Error: {e}")
+                    try:
+                        page.wait_for_load_state("networkidle", timeout=8000)
+                    except:
+                        pass
+
+                    if page.locator("input[name='captchaText']").is_visible():
+                        print("❌ Captcha failed. Retrying...")
+                        continue 
+                    else:
+                        print("✅ Captcha passed.")
+                        return True
+
+            except Exception as e:
+                print(f"⚠️ Captcha Error: {e}")
+                traceback.print_exc()
+        
+        print("❌ Failed to solve captcha after retries.")
         return False
 
     def smart_fill_by_label(self, page, keywords, value):
@@ -65,9 +101,22 @@ class DiploBot:
         except:
             return False
 
+    def verify_success(self, page):
+        content = page.content().lower()
+        success_keywords = ["booking successful", "appointment confirmed", "terminbestätigung", "barcode", "ref-id"]
+        for keyword in success_keywords:
+            if keyword in content:
+                return True
+        return False
+
     def fill_booking_form(self, page):
         print("📝 Filling Booking Form...")
         try:
+            if not page.locator("input[name='lastname']").is_visible():
+                print("❌ Not on form page!")
+                return False
+
+            # 1. الحقول الأساسية
             page.fill("input[name='lastname']", Config.LAST_NAME)
             page.fill("input[name='firstname']", Config.FIRST_NAME)
             page.fill("input[name='email']", Config.EMAIL)
@@ -77,6 +126,7 @@ class DiploBot:
             elif page.locator("input[name='emailRepeat']").is_visible():
                 page.fill("input[name='emailRepeat']", Config.EMAIL)
 
+            # 2. الحقول الذكية
             passport_keywords = ["Passport", "Reisepass", "Passeport"]
             if not self.smart_fill_by_label(page, passport_keywords, Config.PASSPORT):
                 if page.locator("input[name='passportNumber']").is_visible():
@@ -91,30 +141,59 @@ class DiploBot:
                 elif page.locator("input[name='fields[1].content']").is_visible():
                     page.fill("input[name='fields[1].content']", Config.PHONE)
 
+            # 3. القوائم المنسدلة (الذكية)
+            study_keywords = ["Study", "Student", "Studium", "University", "Bachelor", "Master", "PhD", "School"]
             selects = page.locator("select").all()
             for select in selects:
                 if select.is_visible():
+                    found_smart_option = False
                     try:
-                        select.select_option(index=1)
+                        options = select.locator("option").all()
+                        for option in options:
+                            text = option.text_content()
+                            if text and any(keyword.lower() in text.lower() for keyword in study_keywords):
+                                value = option.get_attribute("value")
+                                if value:
+                                    select.select_option(value=value)
+                                    print(f"   -> Smart Select: Found '{text}'")
+                                    found_smart_option = True
+                                    break
                     except:
                         pass
+                    if not found_smart_option:
+                        try:
+                            select.select_option(index=1)
+                        except:
+                            pass
 
-            self.handle_captcha(page)
+            # 4. كابتشا الإرسال
+            if not self.handle_captcha(page, max_retries=5):
+                print("❌ Failed final captcha.")
+                return False
             
-            print("🚨 FORM READY! submitting...")
-            page.screenshot(path="final_filled.png")
-            send_photo("final_filled.png", caption="🚨 Submitting Form...")
+            print("🚨 FORM READY! Submitting...")
+            ts = self.get_timestamp()
+            page.screenshot(path=f"form_filled_{ts}.png")
+            send_photo(f"form_filled_{ts}.png", caption="🚨 Submitting Form...")
             
-            # محاولة الإرسال بـ Enter أيضاً
+            # 5. الإرسال النهائي (Enter)
             page.keyboard.press("Enter")
             
             page.wait_for_timeout(5000)
-            page.screenshot(path="result.png")
-            send_photo("result.png", caption="✅ Booking Result")
-            return True
+            page.screenshot(path=f"result_{ts}.png")
+            
+            if self.verify_success(page):
+                print("✅ BOOKING CONFIRMED!")
+                send_photo(f"result_{ts}.png", caption="✅ BOOKING SUCCESSFUL!")
+                return True
+            else:
+                print("⚠️ Booking verification failed (Check image).")
+                send_photo(f"result_{ts}.png", caption="⚠️ Booking Result (Unverified)")
+                return True 
 
         except Exception as e:
             print(f"❌ Form Error: {e}")
+            traceback.print_exc()
             return False
 
     def run(self):
@@ -127,7 +206,7 @@ class DiploBot:
             page = context.new_page()
             
             print(f"🚀 Sniper Active. Target: {Config.TARGET_URL}")
-            send_alert("🚀 Diplo Sniper Restarted (Enter Key Mode)...")
+            send_alert("🚀 Diplo Sniper V6 (Smart Filter) Started...")
             
             while True:
                 month_urls = self.get_month_urls()
@@ -141,37 +220,38 @@ class DiploBot:
                         except:
                             continue
                         
-                        self.handle_captcha(page)
-                        
-                        # فحص هل تجاوزنا الكابتشا؟
-                        # إذا كنا لا نزال نرى حقل الكابتشا، فهذا يعني الفشل
-                        if page.locator("input[name='captchaText']").is_visible():
-                            print("   -> Captcha loop detected (Wrong code?). Skipping...")
-                            continue
+                        if not self.handle_captcha(page):
+                            continue 
 
-                        # --- منطقة التشخيص ---
-                        day_link = page.locator("a.arrow[href*='appointment_showDay']").first
+                        content = page.content()
+                        if "Unfortunately, there are no appointments" in content or "keine Termine" in content:
+                            time.sleep(random.uniform(2, 4)) 
+                            continue
                         
+                        day_link = page.locator("a.arrow[href*='appointment_showDay']").first
                         if day_link.is_visible():
                             print("🔥 DAY FOUND!")
                             send_alert(f"🔥 DAY FOUND! {date_part}")
                             day_link.click()
-                            self.handle_captcha(page)
+                            
+                            if not self.handle_captcha(page): continue
                             
                             time_link = page.locator("a.arrow[href*='appointment_showForm']").first
                             if time_link.is_visible():
                                 print("⏰ TIME FOUND!")
                                 time_link.click()
-                                self.handle_captcha(page)
+                                
+                                if not self.handle_captcha(page): continue
+                                
                                 if self.fill_booking_form(page):
-                                    print("✅ DONE.")
+                                    print("✅ DONE. Exiting.")
                                     return
                         else:
-                            # إرسال صورة فقط إذا لم نكن في صفحة الكابتشا
                             if not self.debug_photo_sent and not page.locator("input[name='captchaText']").is_visible():
+                                ts = self.get_timestamp()
                                 print("📸 Sending Debug Screenshot...")
-                                page.screenshot(path="debug_view.png")
-                                send_photo("debug_view.png", caption=f"⚠️ Debug: Calendar View {date_part}")
+                                page.screenshot(path=f"debug_{ts}.png")
+                                send_photo(f"debug_{ts}.png", caption=f"⚠️ Debug: Calendar View {date_part}")
                                 self.debug_photo_sent = True
 
                     except Exception as e:
