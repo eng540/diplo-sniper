@@ -7,7 +7,7 @@ import traceback
 import tempfile
 from playwright.sync_api import sync_playwright
 
-# استيراد الوحدات الخاصة بك (تأكد من وجود هذه الملفات بجانب السكربت)
+# استيراد الوحدات الخاصة بك
 from .config import Config
 from .captcha import CaptchaSolver
 from .notifier import send_alert, send_photo
@@ -19,7 +19,7 @@ class DiploBot:
         self.base_url_template = Config.TARGET_URL + "&request_locale=en"
         self.debug_photos_sent_today = 0
         self.last_debug_date = None
-        print("💎 DiploBot Diamond Edition Initialized.")
+        print("💎 DiploBot Diamond Edition Initialized (Fixed).")
 
     def get_timestamp(self):
         return datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -27,7 +27,6 @@ class DiploBot:
     def get_month_urls_dynamic(self):
         """
         توليد روابط الأشهر الـ 6 القادمة ديناميكياً وبدقة.
-        يتعامل مع الانتقال من ديسمبر (12) إلى يناير (1) بشكل صحيح.
         """
         urls = []
         today = datetime.date.today()
@@ -55,14 +54,13 @@ class DiploBot:
 
     def handle_captcha_smart(self, page, context="unknown", max_refreshes=5):
         """
-        استراتيجية الكابتشا الذكية:
-        1. التحقق من النمط (طول 6، حروف وأرقام).
-        2. الرفض الفوري للكابتشا المعقدة وتحديثها.
-        3. استخدام زر Enter للإرسال السريع.
+        استراتيجية الكابتشا الذكية (مصححة):
+        تقرأ الملف كبايتات لضمان التوافق مع ddddocr.
         """
         print(f"🎯 معالجة كابتشا ذكية ({context})")
         
         for refresh_attempt in range(max_refreshes):
+            captcha_path = None
             try:
                 # التحقق السريع من وجود الكابتشا
                 if not page.locator("input[name='captchaText']").is_visible(timeout=2000):
@@ -72,7 +70,7 @@ class DiploBot:
                 captcha_element = page.locator("captcha > div, div[id^='_']").first
                 if not captcha_element.is_visible():
                     print("   ❌ لم يتم العثور على صورة الكابتشا")
-                    return False # خطأ في الصفحة
+                    return False 
                 
                 # انتظار ثبات الصورة
                 page.wait_for_timeout(500)
@@ -83,10 +81,14 @@ class DiploBot:
                     captcha_path = tmp.name
                 
                 try:
+                    # 🔥 التصحيح الجوهري: قراءة الملف كبايتات
+                    with open(captcha_path, 'rb') as f:
+                        image_bytes = f.read()
+
                     # حل الكابتشا
-                    code = self.solver.solve(captcha_path)
+                    code = self.solver.solve(image_bytes)
                     
-                    # 🔥 الفلترة الذكية (Validation Logic)
+                    # الفلترة الذكية (Validation Logic)
                     is_valid, reason = self._validate_captcha_code(code)
                     
                     if not is_valid:
@@ -114,11 +116,13 @@ class DiploBot:
                         print(f"   ❌ الكود غير صحيح، المحاولة التالية...")
                         
                 finally:
-                    if os.path.exists(captcha_path):
+                    if captcha_path and os.path.exists(captcha_path):
                         os.unlink(captcha_path)
                 
             except Exception as e:
                 print(f"   ⚠️ خطأ أثناء المعالجة: {e}")
+                if captcha_path and os.path.exists(captcha_path):
+                        os.unlink(captcha_path)
                 self._refresh_captcha_immediately(page)
         
         print(f"❌ فشل تجاوز الكابتشا بعد {max_refreshes} محاولات")
@@ -130,7 +134,6 @@ class DiploBot:
         code = code.strip()
         if len(code) != 6: return False, f"الطول {len(code)}"
         if not re.match(r'^[a-zA-Z0-9]+$', code): return False, "رموز غير مسموحة"
-        # رفض الأنماط المتكررة (مثل aaaaaa)
         if len(set(code)) < 3: return False, "نمط متكرر"
         return True, "صالح"
 
@@ -153,7 +156,7 @@ class DiploBot:
         page.reload()
 
     def smart_fill_by_label(self, page, keywords, value):
-        """التوجيه الدلالي: البحث عن الحقل عبر عنوانه (Label)"""
+        """التوجيه الدلالي: البحث عن الحقل عبر عنوانه"""
         try:
             for word in keywords:
                 # XPath للبحث عن Label يحتوي النص (غير حساس لحالة الأحرف)
@@ -205,7 +208,7 @@ class DiploBot:
             print(f"   ✅ تم اختيار: (Score: {best_score})")
             return True
         
-        # Fallback: الخيار الثاني إذا لم نجد تطابق
+        # Fallback
         try:
             select.select_option(index=1)
             print("   ⚠️ تم اختيار الخيار الثاني (افتراضي)")
@@ -216,23 +219,20 @@ class DiploBot:
         """تعبئة الاستمارة الكاملة"""
         print("📝 بدء تعبئة الاستمارة...")
         try:
-            # 1. الأسماء والإيميل (ثوابت)
+            # 1. الأسماء والإيميل
             page.fill("input[name='lastname']", Config.LAST_NAME)
             page.fill("input[name='firstname']", Config.FIRST_NAME)
             page.fill("input[name='email']", Config.EMAIL)
             
-            # تكرار الإيميل (بحث ذكي)
             if page.locator("input[name*='emailrepeat'], input[name*='emailRepeat']").count() > 0:
                 page.locator("input[name*='emailrepeat'], input[name*='emailRepeat']").first.fill(Config.EMAIL)
 
-            # 2. الحقول الذكية (جواز / هاتف)
+            # 2. الحقول الذكية
             if not self.smart_fill_by_label(page, ["Passport", "Reisepass", "Passeport"], Config.PASSPORT):
-                # Fallback
                 if page.locator("input[name='fields[0].content']").is_visible():
                     page.fill("input[name='fields[0].content']", Config.PASSPORT)
 
             if not self.smart_fill_by_label(page, ["Phone", "Telephone", "Telefon", "Mobile"], Config.PHONE):
-                # Fallback
                 if page.locator("input[name='fields[1].content']").is_visible():
                     page.fill("input[name='fields[1].content']", Config.PHONE)
 
@@ -244,13 +244,13 @@ class DiploBot:
                 print("❌ فشل كابتشا الاستمارة")
                 return False
 
-            # 5. التوثيق قبل الإرسال
+            # 5. التوثيق
             ts = self.get_timestamp()
             screenshot_path = f"form_ready_{ts}.png"
             page.screenshot(path=screenshot_path)
             send_photo(screenshot_path, caption="🚨 Form Filled! Submitting...")
 
-            # 6. الإرسال (Enter)
+            # 6. الإرسال
             print("🚀 إرسال الطلب نهائياً...")
             page.keyboard.press("Enter")
             
@@ -259,7 +259,7 @@ class DiploBot:
             result_path = f"result_{ts}.png"
             page.screenshot(path=result_path)
             
-            # التحقق البسيط من النجاح
+            # التحقق
             content = page.content().lower()
             if "success" in content or "termin" in content or "barcode" in content:
                 print("✅✅✅ BOOKING SUCCESSFUL! ✅✅✅")
@@ -268,7 +268,7 @@ class DiploBot:
             else:
                 print("⚠️ نتيجة غير مؤكدة.")
                 send_photo(result_path, caption="⚠️ Check Result Manually")
-                return True # نعتبره تم للخروج من الحلقة
+                return True
 
         except Exception as e:
             print(f"❌ خطأ في الاستمارة: {e}")
@@ -278,11 +278,11 @@ class DiploBot:
     def run(self):
         """تشغيل البوت مع إعدادات التخفي (Stealth)"""
         with sync_playwright() as p:
-            # إعدادات المتصفح للتخفي
+            # إعدادات المتصفح
             browser = p.chromium.launch(
-                headless=True, # اجعلها False للتجربة والمشاهدة
+                headless=True,
                 args=[
-                    "--disable-blink-features=AutomationControlled", # إخفاء البوت
+                    "--disable-blink-features=AutomationControlled",
                     "--no-sandbox",
                     "--disable-infobars",
                     "--disable-dev-shm-usage",
@@ -290,7 +290,6 @@ class DiploBot:
                 ]
             )
             
-            # إعداد السياق (User Agent + Viewport)
             context = browser.new_context(
                 user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
                 viewport={"width": 1280, "height": 720}
@@ -299,7 +298,6 @@ class DiploBot:
             
             page = context.new_page()
             
-            # إخفاء webdriver property (حيلة إضافية)
             page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
 
             print(f"🚀 Sniper Active via Playwright. Target: {Config.TARGET_URL}")
@@ -319,17 +317,14 @@ class DiploBot:
                             print("   ⚠️ Timeout loading page")
                             continue
 
-                        # حل كابتشا الدخول للشهر
                         if not self.handle_captcha_smart(page, "month_access"):
                             continue
                             
-                        # فحص المواعيد
                         content = page.content()
                         if "Unfortunately, there are no appointments" in content or "keine Termine" in content:
-                            time.sleep(random.uniform(1.5, 3.5)) # تأخير عشوائي بشري
+                            time.sleep(random.uniform(1.5, 3.5))
                             continue
                         
-                        # محاولة العثور على يوم
                         day_link = page.locator("a.arrow[href*='appointment_showDay']").first
                         if day_link.is_visible():
                             print(f"🔥 تم العثور على يوم في {date_part}!")
@@ -338,19 +333,16 @@ class DiploBot:
                             day_link.click()
                             if not self.handle_captcha_smart(page, "day_select"): continue
                             
-                            # محاولة العثور على وقت
                             time_link = page.locator("a.arrow[href*='appointment_showForm']").first
                             if time_link.is_visible():
                                 print("⏰ وقت متاح! الدخول للاستمارة...")
                                 time_link.click()
                                 if not self.handle_captcha_smart(page, "time_select"): continue
                                 
-                                # تعبئة الاستمارة
                                 if self.fill_booking_form_enhanced(page):
                                     print("🎉 المهمة اكتملت.")
-                                    return # خروج نهائي
+                                    return
                         else:
-                            # لقطة تشخيصية يومية (اختياري)
                             pass 
 
                 except Exception as e:
@@ -360,7 +352,6 @@ class DiploBot:
                 print("💤 استراحة قصيرة (60 ثانية)...")
                 time.sleep(60)
 
-# نقطة الدخول
 if __name__ == "__main__":
     bot = DiploBot()
     bot.run()
