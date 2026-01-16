@@ -34,7 +34,9 @@ class DiploBot:
         return urls
 
     def handle_captcha(self, page, max_retries=3):
-        """استراتيجية كابتشا متقدمة مع إعادة المحاولة"""
+        """
+        التعامل مع الكابتشا باستخدام طريقة Enter المثبتة فعاليتها
+        """
         for attempt in range(max_retries):
             try:
                 if not page.locator("input[name='captchaText']").is_visible():
@@ -51,27 +53,21 @@ class DiploBot:
                     
                     page.fill("input[name='captchaText']", code)
                     
-                    submit_btn = page.locator("input[type='submit'][name^='action:appointment']").first
-                    if submit_btn.is_visible():
-                        submit_btn.click()
-                    else:
-                        page.keyboard.press("Enter")
+                    # العودة للطريقة التي نجحت: ضغط Enter
+                    print("   -> Pressing Enter...")
+                    page.keyboard.press("Enter")
                     
                     try:
-                        page.wait_for_load_state("networkidle", timeout=10000)
+                        # انتظار اختفاء حقل الكابتشا كدليل على النجاح
+                        page.wait_for_selector("input[name='captchaText']", state="hidden", timeout=8000)
+                        print("✅ Captcha passed (Page changed).")
+                        return True
                     except:
-                        pass
-
-                    if page.locator("input[name='captchaText']").is_visible():
                         print("❌ Captcha failed (Page didn't change). Retrying...")
                         continue 
-                    else:
-                        print("✅ Captcha passed.")
-                        return True
 
             except Exception as e:
                 print(f"⚠️ Captcha Error: {e}")
-                traceback.print_exc()
         
         print("❌ Failed to solve captcha after retries.")
         return False
@@ -87,8 +83,7 @@ class DiploBot:
                         page.fill(f"#{target_id}", value)
                         return True
             return False
-        except Exception as e:
-            print(f"Smart fill error: {e}")
+        except:
             return False
 
     def verify_success(self, page):
@@ -116,7 +111,7 @@ class DiploBot:
             elif page.locator("input[name='emailRepeat']").is_visible():
                 page.fill("input[name='emailRepeat']", Config.EMAIL)
 
-            # 2. الحقول الذكية (جواز وهاتف)
+            # 2. الحقول الذكية
             passport_keywords = ["Passport", "Reisepass", "Passeport"]
             if not self.smart_fill_by_label(page, passport_keywords, Config.PASSPORT):
                 if page.locator("input[name='passportNumber']").is_visible():
@@ -131,35 +126,28 @@ class DiploBot:
                 elif page.locator("input[name='fields[1].content']").is_visible():
                     page.fill("input[name='fields[1].content']", Config.PHONE)
 
-            # 3. القوائم المنسدلة (اختيار الغرض بذكاء)
-            # الكلمات المفتاحية للدراسة (إنجليزي وألماني)
+            # 3. القوائم المنسدلة (الذكية)
             study_keywords = ["Study", "Student", "Studium", "University", "Bachelor", "Master", "PhD", "School"]
-            
             selects = page.locator("select").all()
             for select in selects:
                 if select.is_visible():
                     found_smart_option = False
                     try:
-                        # فحص كل الخيارات داخل القائمة
                         options = select.locator("option").all()
                         for option in options:
                             text = option.text_content()
-                            # هل النص يحتوي على كلمة دراسة؟
                             if text and any(keyword.lower() in text.lower() for keyword in study_keywords):
                                 value = option.get_attribute("value")
-                                if value: # التأكد أنه ليس خياراً فارغاً
+                                if value:
                                     select.select_option(value=value)
                                     print(f"   -> Smart Select: Found '{text}'")
                                     found_smart_option = True
                                     break
-                    except Exception as e:
-                        print(f"   -> Smart select error: {e}")
-
-                    # الخطة البديلة: إذا لم نجد كلمة دراسة، نختار الخيار الثاني
+                    except:
+                        pass
                     if not found_smart_option:
                         try:
                             select.select_option(index=1)
-                            print("   -> Fallback: Selected index 1")
                         except:
                             pass
 
@@ -173,12 +161,8 @@ class DiploBot:
             page.screenshot(path=f"form_filled_{ts}.png")
             send_photo(f"form_filled_{ts}.png", caption="🚨 Submitting Form...")
             
-            # 5. الإرسال النهائي
-            submit_btn = page.locator("input[type='submit'][name^='action:appointment_add']")
-            if submit_btn.is_visible():
-                submit_btn.click()
-            else:
-                page.keyboard.press("Enter")
+            # 5. الإرسال النهائي (Enter)
+            page.keyboard.press("Enter")
             
             page.wait_for_timeout(5000)
             page.screenshot(path=f"result_{ts}.png")
@@ -207,7 +191,7 @@ class DiploBot:
             page = context.new_page()
             
             print(f"🚀 Sniper Active. Target: {Config.TARGET_URL}")
-            send_alert("🚀 Diplo Sniper V3 (Smart Select) Started...")
+            send_alert("🚀 Diplo Sniper V4 (Stable Enter) Started...")
             
             while True:
                 month_urls = self.get_month_urls()
@@ -218,8 +202,7 @@ class DiploBot:
                         
                         try:
                             page.goto(url, wait_until="domcontentloaded")
-                        except Exception as e:
-                            print(f"   -> Timeout/Error loading page: {e}")
+                        except:
                             continue
                         
                         if not self.handle_captcha(page):
@@ -258,7 +241,6 @@ class DiploBot:
 
                     except Exception as e:
                         print(f"⚠️ Loop Error: {e}")
-                        traceback.print_exc()
                         time.sleep(5)
                 
                 print("💤 Cycle done. Sleeping 60s...")
