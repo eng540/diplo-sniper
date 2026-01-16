@@ -11,7 +11,7 @@ class DiploBot:
     def __init__(self):
         self.solver = CaptchaSolver()
         self.base_url_template = Config.TARGET_URL + "&request_locale=en"
-        self.debug_photo_sent = False # متغير لمنع إزعاجك بمئات الصور
+        self.debug_photo_sent = False 
 
     def get_month_urls(self):
         urls = []
@@ -35,19 +35,18 @@ class DiploBot:
                 print("🚧 [Captcha] Found. Solving...")
                 captcha_element = page.locator("captcha > div").first
                 if captcha_element.is_visible():
-                    page.wait_for_timeout(1000) # انتظار أطول للصورة
+                    page.wait_for_timeout(1000)
                     captcha_bytes = captcha_element.screenshot()
                     code = self.solver.solve(captcha_bytes)
                     print(f"🧩 Decoded: {code}")
-                    page.fill("input[name='captchaText']", code)
                     
-                    submit_btn = page.locator("input[type='submit'][name^='action:appointment']").first
-                    if submit_btn.is_visible():
-                        submit_btn.click()
-                        print("⏳ Waiting for server response...")
-                        # --- تعديل هام: انتظار إجباري 5 ثواني ---
-                        time.sleep(5) 
-                        return True
+                    # الكتابة ثم ضغط Enter
+                    page.fill("input[name='captchaText']", code)
+                    page.keyboard.press("Enter")
+                    
+                    print("⏳ Enter pressed. Waiting...")
+                    time.sleep(5) # انتظار التحميل
+                    return True
         except Exception as e:
             print(f"⚠️ Captcha Error: {e}")
         return False
@@ -106,14 +105,13 @@ class DiploBot:
             page.screenshot(path="final_filled.png")
             send_photo("final_filled.png", caption="🚨 Submitting Form...")
             
-            submit_btn = page.locator("input[type='submit'][name^='action:appointment_add']")
-            if submit_btn.is_visible():
-                submit_btn.click()
-                page.wait_for_timeout(5000)
-                page.screenshot(path="result.png")
-                send_photo("result.png", caption="✅ Booking Result")
-                return True
-            return False
+            # محاولة الإرسال بـ Enter أيضاً
+            page.keyboard.press("Enter")
+            
+            page.wait_for_timeout(5000)
+            page.screenshot(path="result.png")
+            send_photo("result.png", caption="✅ Booking Result")
+            return True
 
         except Exception as e:
             print(f"❌ Form Error: {e}")
@@ -129,7 +127,7 @@ class DiploBot:
             page = context.new_page()
             
             print(f"🚀 Sniper Active. Target: {Config.TARGET_URL}")
-            send_alert("🚀 Diplo Sniper Restarted with Debug Mode...")
+            send_alert("🚀 Diplo Sniper Restarted (Enter Key Mode)...")
             
             while True:
                 month_urls = self.get_month_urls()
@@ -145,8 +143,13 @@ class DiploBot:
                         
                         self.handle_captcha(page)
                         
-                        # --- منطقة التشخيص (Debug Area) ---
-                        # البحث عن رابط اليوم
+                        # فحص هل تجاوزنا الكابتشا؟
+                        # إذا كنا لا نزال نرى حقل الكابتشا، فهذا يعني الفشل
+                        if page.locator("input[name='captchaText']").is_visible():
+                            print("   -> Captcha loop detected (Wrong code?). Skipping...")
+                            continue
+
+                        # --- منطقة التشخيص ---
                         day_link = page.locator("a.arrow[href*='appointment_showDay']").first
                         
                         if day_link.is_visible():
@@ -164,12 +167,12 @@ class DiploBot:
                                     print("✅ DONE.")
                                     return
                         else:
-                            # إذا لم يجد موعداً، ولم نرسل صورة من قبل، أرسل صورة لنرى ماذا يرى البوت
-                            if not self.debug_photo_sent:
+                            # إرسال صورة فقط إذا لم نكن في صفحة الكابتشا
+                            if not self.debug_photo_sent and not page.locator("input[name='captchaText']").is_visible():
                                 print("📸 Sending Debug Screenshot...")
                                 page.screenshot(path="debug_view.png")
-                                send_photo("debug_view.png", caption=f"⚠️ Debug: This is what I see in {date_part}")
-                                self.debug_photo_sent = True # حتى لا يزعجك بالصور كل ثانية
+                                send_photo("debug_view.png", caption=f"⚠️ Debug: Calendar View {date_part}")
+                                self.debug_photo_sent = True
 
                     except Exception as e:
                         print(f"⚠️ Loop Error: {e}")
