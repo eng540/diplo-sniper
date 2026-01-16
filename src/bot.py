@@ -2,8 +2,12 @@ import time
 import random
 import datetime
 import os
+import re
 import traceback
+import tempfile
 from playwright.sync_api import sync_playwright
+
+# استيراد الوحدات الخاصة بك (تأكد من وجود هذه الملفات بجانب السكربت)
 from .config import Config
 from .captcha import CaptchaSolver
 from .notifier import send_alert, send_photo
@@ -11,252 +15,352 @@ from .notifier import send_alert, send_photo
 class DiploBot:
     def __init__(self):
         self.solver = CaptchaSolver()
+        # إضافة Locale لضمان اللغة الإنجليزية
         self.base_url_template = Config.TARGET_URL + "&request_locale=en"
-        self.debug_photo_sent = False
+        self.debug_photos_sent_today = 0
+        self.last_debug_date = None
+        print("💎 DiploBot Diamond Edition Initialized.")
 
     def get_timestamp(self):
         return datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
 
-    def get_month_urls(self):
+    def get_month_urls_dynamic(self):
+        """
+        توليد روابط الأشهر الـ 6 القادمة ديناميكياً وبدقة.
+        يتعامل مع الانتقال من ديسمبر (12) إلى يناير (1) بشكل صحيح.
+        """
         urls = []
         today = datetime.date.today()
+        
+        # تنظيف الرابط الأساسي
         if "&dateStr=" in self.base_url_template:
             base_clean = self.base_url_template.split("&dateStr=")[0]
         else:
             base_clean = self.base_url_template
 
-        for i in range(6): 
-            future_month = (today.month + i - 1) % 12 + 1
-            future_year = today.year + ((today.month + i - 1) // 12)
+        # فحص الأشهر الـ 6 القادمة
+        for i in range(6):
+            # حساب الشهر والسنة القادمين
+            next_month_index = today.month + i
+            
+            future_year = today.year + ((next_month_index - 1) // 12)
+            future_month = ((next_month_index - 1) % 12) + 1
+            
+            # نستخدم يوم 15 لضمان التواجد في منتصف الشهر
             date_str = f"15.{future_month:02d}.{future_year}"
             full_url = f"{base_clean}&dateStr={date_str}"
             urls.append(full_url)
+            
         return urls
 
-    def handle_captcha(self, page, max_retries=5):
-        """استراتيجية ذكية: فلترة الطول + Enter"""
-        for attempt in range(max_retries):
+    def handle_captcha_smart(self, page, context="unknown", max_refreshes=5):
+        """
+        استراتيجية الكابتشا الذكية:
+        1. التحقق من النمط (طول 6، حروف وأرقام).
+        2. الرفض الفوري للكابتشا المعقدة وتحديثها.
+        3. استخدام زر Enter للإرسال السريع.
+        """
+        print(f"🎯 معالجة كابتشا ذكية ({context})")
+        
+        for refresh_attempt in range(max_refreshes):
             try:
-                if not page.locator("input[name='captchaText']").is_visible():
-                    return True 
-
-                print(f"🚧 [Captcha] Attempt {attempt+1}/{max_retries}...")
-                captcha_element = page.locator("captcha > div").first
+                # التحقق السريع من وجود الكابتشا
+                if not page.locator("input[name='captchaText']").is_visible(timeout=2000):
+                    return True
                 
-                if captcha_element.is_visible():
-                    page.wait_for_timeout(1000)
-                    captcha_bytes = captcha_element.screenshot()
-                    code = self.solver.solve(captcha_bytes)
+                # التقاط عنصر الكابتشا (Selector شامل)
+                captcha_element = page.locator("captcha > div, div[id^='_']").first
+                if not captcha_element.is_visible():
+                    print("   ❌ لم يتم العثور على صورة الكابتشا")
+                    return False # خطأ في الصفحة
+                
+                # انتظار ثبات الصورة
+                page.wait_for_timeout(500)
+                
+                # حفظ مؤقت للصورة
+                with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp:
+                    captcha_element.screenshot(path=tmp.name)
+                    captcha_path = tmp.name
+                
+                try:
+                    # حل الكابتشا
+                    code = self.solver.solve(captcha_path)
                     
-                    # --- فلترة الطول (أهم تحديث) ---
-                    if len(code) != 6:
-                        print(f"⚠️ Invalid length ({len(code)}). Refreshing...")
-                        # محاولة تحديث الصورة
-                        refresh_btn = page.locator("input[name^='action:appointment_refreshCaptcha']").first
-                        if refresh_btn.is_visible():
-                            refresh_btn.click()
-                            page.wait_for_timeout(2000)
-                        else:
-                            # إذا لم يوجد زر تحديث، نعيد تحميل الصفحة
-                            page.reload()
+                    # 🔥 الفلترة الذكية (Validation Logic)
+                    is_valid, reason = self._validate_captcha_code(code)
+                    
+                    if not is_valid:
+                        print(f"   ⚠️ كود مرفوض ({reason}). تحديث الصورة...")
+                        self._refresh_captcha_immediately(page)
                         continue
                     
-                    print(f"🧩 Decoded: {code}")
+                    print(f"   🧩 تم الحل: {code}")
                     page.fill("input[name='captchaText']", code)
                     
-                    # استخدام Enter (الطريقة الموثوقة)
-                    print("   -> Pressing Enter...")
+                    # الضغط على Enter (أسرع من البحث عن الزر)
                     page.keyboard.press("Enter")
                     
+                    # الانتظار الذكي للنتيجة
                     try:
-                        page.wait_for_load_state("networkidle", timeout=8000)
-                    except:
-                        pass
-
-                    if page.locator("input[name='captchaText']").is_visible():
-                        print("❌ Captcha failed. Retrying...")
-                        continue 
-                    else:
-                        print("✅ Captcha passed.")
+                        # ننتظر إما اختفاء الكابتشا (نجاح) أو ظهور رسالة خطأ/كابتشا جديدة
+                        page.wait_for_function(
+                            "() => !document.querySelector(\"input[name='captchaText']\")",
+                            timeout=4000
+                        )
+                        print(f"   ✅ نجاح الكابتشا ({context})")
                         return True
-
+                    except:
+                        # إذا بقيت الكابتشا ظاهرة، فهذا يعني فشل الحل
+                        print(f"   ❌ الكود غير صحيح، المحاولة التالية...")
+                        
+                finally:
+                    if os.path.exists(captcha_path):
+                        os.unlink(captcha_path)
+                
             except Exception as e:
-                print(f"⚠️ Captcha Error: {e}")
-                traceback.print_exc()
+                print(f"   ⚠️ خطأ أثناء المعالجة: {e}")
+                self._refresh_captcha_immediately(page)
         
-        print("❌ Failed to solve captcha after retries.")
+        print(f"❌ فشل تجاوز الكابتشا بعد {max_refreshes} محاولات")
         return False
+
+    def _validate_captcha_code(self, code):
+        """قواعد قبول الكود"""
+        if not code: return False, "فارغ"
+        code = code.strip()
+        if len(code) != 6: return False, f"الطول {len(code)}"
+        if not re.match(r'^[a-zA-Z0-9]+$', code): return False, "رموز غير مسموحة"
+        # رفض الأنماط المتكررة (مثل aaaaaa)
+        if len(set(code)) < 3: return False, "نمط متكرر"
+        return True, "صالح"
+
+    def _refresh_captcha_immediately(self, page):
+        """النقر على أي زر تحديث متاح"""
+        selectors = [
+            "input[name^='action:appointment_refresh']",
+            "a[href*='refreshCaptcha']", 
+            "img[src*='refresh']"
+        ]
+        for sel in selectors:
+            try:
+                elem = page.locator(sel).first
+                if elem.is_visible():
+                    elem.click()
+                    page.wait_for_timeout(1500)
+                    return
+            except: pass
+        # الملاذ الأخير: تحديث الصفحة
+        page.reload()
 
     def smart_fill_by_label(self, page, keywords, value):
+        """التوجيه الدلالي: البحث عن الحقل عبر عنوانه (Label)"""
         try:
             for word in keywords:
-                label_locator = page.locator(f"//label[contains(text(), '{word}')]")
-                if label_locator.count() > 0:
-                    first_label = label_locator.first
-                    target_id = first_label.get_attribute("for")
+                # XPath للبحث عن Label يحتوي النص (غير حساس لحالة الأحرف)
+                label = page.locator(f"//label[contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), '{word.lower()}')]")
+                if label.count() > 0:
+                    target_id = label.first.get_attribute("for")
                     if target_id:
                         page.fill(f"#{target_id}", value)
+                        print(f"   ✅ تم تعبئة الحقل المرتبط بـ '{word}'")
                         return True
             return False
-        except:
+        except Exception as e:
+            print(f"   ⚠️ فشل الملء الذكي: {e}")
             return False
 
-    def verify_success(self, page):
-        content = page.content().lower()
-        success_keywords = ["booking successful", "appointment confirmed", "terminbestätigung", "barcode", "ref-id"]
-        for keyword in success_keywords:
-            if keyword in content:
-                return True
-        return False
+    def select_visa_type_smart(self, page):
+        """نظام النقاط المرجحة لاختيار التأشيرة"""
+        print("🎓 جاري اختيار نوع التأشيرة...")
+        select = page.locator("select[name*='fields']").first
+        if not select.is_visible(): return False
+        
+        options = select.locator("option").all()
+        best_val = None
+        best_score = -10
+        
+        # قاموس النقاط
+        score_rules = {
+            'student': 5, 'studium': 5, 'study': 5,
+            'language': 3, 'sprach': 3, 'course': 2, 'kurs': 2,
+            'master': 4, 'bachelor': 4, 'university': 4,
+            'au-pair': -5, 'internship': -2, 'voluntary': -5, 'employment': -2
+        }
 
-    def fill_booking_form(self, page):
-        print("📝 Filling Booking Form...")
+        for opt in options:
+            txt = (opt.text_content() or "").lower()
+            val = opt.get_attribute("value")
+            if not val: continue
+            
+            score = 0
+            for key, points in score_rules.items():
+                if key in txt: score += points
+            
+            if score > best_score:
+                best_score = score
+                best_val = val
+        
+        if best_val and best_score > 0:
+            select.select_option(value=best_val)
+            print(f"   ✅ تم اختيار: (Score: {best_score})")
+            return True
+        
+        # Fallback: الخيار الثاني إذا لم نجد تطابق
         try:
-            if not page.locator("input[name='lastname']").is_visible():
-                print("❌ Not on form page!")
-                return False
+            select.select_option(index=1)
+            print("   ⚠️ تم اختيار الخيار الثاني (افتراضي)")
+            return True
+        except: return False
 
-            # 1. الحقول الأساسية
+    def fill_booking_form_enhanced(self, page):
+        """تعبئة الاستمارة الكاملة"""
+        print("📝 بدء تعبئة الاستمارة...")
+        try:
+            # 1. الأسماء والإيميل (ثوابت)
             page.fill("input[name='lastname']", Config.LAST_NAME)
             page.fill("input[name='firstname']", Config.FIRST_NAME)
             page.fill("input[name='email']", Config.EMAIL)
             
-            if page.locator("input[name='emailrepeat']").is_visible():
-                page.fill("input[name='emailrepeat']", Config.EMAIL)
-            elif page.locator("input[name='emailRepeat']").is_visible():
-                page.fill("input[name='emailRepeat']", Config.EMAIL)
+            # تكرار الإيميل (بحث ذكي)
+            if page.locator("input[name*='emailrepeat'], input[name*='emailRepeat']").count() > 0:
+                page.locator("input[name*='emailrepeat'], input[name*='emailRepeat']").first.fill(Config.EMAIL)
 
-            # 2. الحقول الذكية
-            passport_keywords = ["Passport", "Reisepass", "Passeport"]
-            if not self.smart_fill_by_label(page, passport_keywords, Config.PASSPORT):
-                if page.locator("input[name='passportNumber']").is_visible():
-                    page.fill("input[name='passportNumber']", Config.PASSPORT)
-                elif page.locator("input[name='fields[0].content']").is_visible():
+            # 2. الحقول الذكية (جواز / هاتف)
+            if not self.smart_fill_by_label(page, ["Passport", "Reisepass", "Passeport"], Config.PASSPORT):
+                # Fallback
+                if page.locator("input[name='fields[0].content']").is_visible():
                     page.fill("input[name='fields[0].content']", Config.PASSPORT)
 
-            phone_keywords = ["Phone", "Telephone", "Telefon", "Mobile"]
-            if not self.smart_fill_by_label(page, phone_keywords, Config.PHONE):
-                if page.locator("input[name='phone']").is_visible():
-                    page.fill("input[name='phone']", Config.PHONE)
-                elif page.locator("input[name='fields[1].content']").is_visible():
+            if not self.smart_fill_by_label(page, ["Phone", "Telephone", "Telefon", "Mobile"], Config.PHONE):
+                # Fallback
+                if page.locator("input[name='fields[1].content']").is_visible():
                     page.fill("input[name='fields[1].content']", Config.PHONE)
 
-            # 3. القوائم المنسدلة (الذكية)
-            study_keywords = ["Study", "Student", "Studium", "University", "Bachelor", "Master", "PhD", "School"]
-            selects = page.locator("select").all()
-            for select in selects:
-                if select.is_visible():
-                    found_smart_option = False
-                    try:
-                        options = select.locator("option").all()
-                        for option in options:
-                            text = option.text_content()
-                            if text and any(keyword.lower() in text.lower() for keyword in study_keywords):
-                                value = option.get_attribute("value")
-                                if value:
-                                    select.select_option(value=value)
-                                    print(f"   -> Smart Select: Found '{text}'")
-                                    found_smart_option = True
-                                    break
-                    except:
-                        pass
-                    if not found_smart_option:
-                        try:
-                            select.select_option(index=1)
-                        except:
-                            pass
+            # 3. اختيار التأشيرة
+            self.select_visa_type_smart(page)
 
-            # 4. كابتشا الإرسال
-            if not self.handle_captcha(page, max_retries=5):
-                print("❌ Failed final captcha.")
+            # 4. كابتشا الإرسال النهائي
+            if not self.handle_captcha_smart(page, "final_submit", max_refreshes=10):
+                print("❌ فشل كابتشا الاستمارة")
                 return False
-            
-            print("🚨 FORM READY! Submitting...")
+
+            # 5. التوثيق قبل الإرسال
             ts = self.get_timestamp()
-            page.screenshot(path=f"form_filled_{ts}.png")
-            send_photo(f"form_filled_{ts}.png", caption="🚨 Submitting Form...")
-            
-            # 5. الإرسال النهائي (Enter)
+            screenshot_path = f"form_ready_{ts}.png"
+            page.screenshot(path=screenshot_path)
+            send_photo(screenshot_path, caption="🚨 Form Filled! Submitting...")
+
+            # 6. الإرسال (Enter)
+            print("🚀 إرسال الطلب نهائياً...")
             page.keyboard.press("Enter")
             
+            # 7. انتظار النتيجة
             page.wait_for_timeout(5000)
-            page.screenshot(path=f"result_{ts}.png")
+            result_path = f"result_{ts}.png"
+            page.screenshot(path=result_path)
             
-            if self.verify_success(page):
-                print("✅ BOOKING CONFIRMED!")
-                send_photo(f"result_{ts}.png", caption="✅ BOOKING SUCCESSFUL!")
+            # التحقق البسيط من النجاح
+            content = page.content().lower()
+            if "success" in content or "termin" in content or "barcode" in content:
+                print("✅✅✅ BOOKING SUCCESSFUL! ✅✅✅")
+                send_photo(result_path, caption="✅ BOOKING CONFIRMED!")
                 return True
             else:
-                print("⚠️ Booking verification failed (Check image).")
-                send_photo(f"result_{ts}.png", caption="⚠️ Booking Result (Unverified)")
-                return True 
+                print("⚠️ نتيجة غير مؤكدة.")
+                send_photo(result_path, caption="⚠️ Check Result Manually")
+                return True # نعتبره تم للخروج من الحلقة
 
         except Exception as e:
-            print(f"❌ Form Error: {e}")
+            print(f"❌ خطأ في الاستمارة: {e}")
             traceback.print_exc()
             return False
 
     def run(self):
+        """تشغيل البوت مع إعدادات التخفي (Stealth)"""
         with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True, args=["--no-sandbox", "--disable-gpu"])
-            context = browser.new_context(
-                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36"
+            # إعدادات المتصفح للتخفي
+            browser = p.chromium.launch(
+                headless=True, # اجعلها False للتجربة والمشاهدة
+                args=[
+                    "--disable-blink-features=AutomationControlled", # إخفاء البوت
+                    "--no-sandbox",
+                    "--disable-infobars",
+                    "--disable-dev-shm-usage",
+                    "--disable-gpu"
+                ]
             )
-            context.set_default_timeout(60000)
+            
+            # إعداد السياق (User Agent + Viewport)
+            context = browser.new_context(
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                viewport={"width": 1280, "height": 720}
+            )
+            context.set_default_timeout(30000)
+            
             page = context.new_page()
             
-            print(f"🚀 Sniper Active. Target: {Config.TARGET_URL}")
-            send_alert("🚀 Diplo Sniper V6 (Smart Filter) Started...")
-            
+            # إخفاء webdriver property (حيلة إضافية)
+            page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+
+            print(f"🚀 Sniper Active via Playwright. Target: {Config.TARGET_URL}")
+            send_alert("🚀 DiploBot Started (Stealth Mode)")
+
             while True:
-                month_urls = self.get_month_urls()
-                for url in month_urls:
-                    try:
-                        date_part = url.split("dateStr=")[1] if "dateStr=" in url else "Unknown"
-                        print(f"🔎 Scanning: {date_part}")
+                try:
+                    month_urls = self.get_month_urls_dynamic()
+                    
+                    for url in month_urls:
+                        date_part = url.split("dateStr=")[-1]
+                        print(f"🔎 فحص: {date_part}")
                         
                         try:
                             page.goto(url, wait_until="domcontentloaded")
                         except:
+                            print("   ⚠️ Timeout loading page")
                             continue
-                        
-                        if not self.handle_captcha(page):
-                            continue 
 
+                        # حل كابتشا الدخول للشهر
+                        if not self.handle_captcha_smart(page, "month_access"):
+                            continue
+                            
+                        # فحص المواعيد
                         content = page.content()
                         if "Unfortunately, there are no appointments" in content or "keine Termine" in content:
-                            time.sleep(random.uniform(2, 4)) 
+                            time.sleep(random.uniform(1.5, 3.5)) # تأخير عشوائي بشري
                             continue
                         
+                        # محاولة العثور على يوم
                         day_link = page.locator("a.arrow[href*='appointment_showDay']").first
                         if day_link.is_visible():
-                            print("🔥 DAY FOUND!")
-                            send_alert(f"🔥 DAY FOUND! {date_part}")
+                            print(f"🔥 تم العثور على يوم في {date_part}!")
+                            send_alert(f"🔥 DAY OPEN: {date_part}")
+                            
                             day_link.click()
+                            if not self.handle_captcha_smart(page, "day_select"): continue
                             
-                            if not self.handle_captcha(page): continue
-                            
+                            # محاولة العثور على وقت
                             time_link = page.locator("a.arrow[href*='appointment_showForm']").first
                             if time_link.is_visible():
-                                print("⏰ TIME FOUND!")
+                                print("⏰ وقت متاح! الدخول للاستمارة...")
                                 time_link.click()
+                                if not self.handle_captcha_smart(page, "time_select"): continue
                                 
-                                if not self.handle_captcha(page): continue
-                                
-                                if self.fill_booking_form(page):
-                                    print("✅ DONE. Exiting.")
-                                    return
+                                # تعبئة الاستمارة
+                                if self.fill_booking_form_enhanced(page):
+                                    print("🎉 المهمة اكتملت.")
+                                    return # خروج نهائي
                         else:
-                            if not self.debug_photo_sent and not page.locator("input[name='captchaText']").is_visible():
-                                ts = self.get_timestamp()
-                                print("📸 Sending Debug Screenshot...")
-                                page.screenshot(path=f"debug_{ts}.png")
-                                send_photo(f"debug_{ts}.png", caption=f"⚠️ Debug: Calendar View {date_part}")
-                                self.debug_photo_sent = True
+                            # لقطة تشخيصية يومية (اختياري)
+                            pass 
 
-                    except Exception as e:
-                        print(f"⚠️ Loop Error: {e}")
-                        time.sleep(5)
+                except Exception as e:
+                    print(f"⚠️ خطأ عام في الدورة: {e}")
+                    time.sleep(10)
                 
-                print("💤 Cycle done. Sleeping 60s...")
+                print("💤 استراحة قصيرة (60 ثانية)...")
                 time.sleep(60)
+
+# نقطة الدخول
+if __name__ == "__main__":
+    bot = DiploBot()
+    bot.run()
