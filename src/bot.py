@@ -19,7 +19,7 @@ class DiploBot:
         self.base_url_template = Config.TARGET_URL + "&request_locale=en"
         self.debug_photos_sent_today = 0
         self.last_debug_date = None
-        print("💎 DiploBot Diamond Edition Initialized (Fixed).")
+        print("💎 DiploBot Diamond Edition Initialized (Production Ready).")
 
     def get_timestamp(self):
         return datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -66,7 +66,7 @@ class DiploBot:
                 if not page.locator("input[name='captchaText']").is_visible(timeout=2000):
                     return True
                 
-                # التقاط عنصر الكابتشا (Selector شامل)
+                # التقاط عنصر الكابتشا
                 captcha_element = page.locator("captcha > div, div[id^='_']").first
                 if not captcha_element.is_visible():
                     print("   ❌ لم يتم العثور على صورة الكابتشا")
@@ -81,14 +81,14 @@ class DiploBot:
                     captcha_path = tmp.name
                 
                 try:
-                    # 🔥 التصحيح الجوهري: قراءة الملف كبايتات
+                    # 🔥 قراءة الملف كبايتات (حل مشكلة padding)
                     with open(captcha_path, 'rb') as f:
                         image_bytes = f.read()
 
                     # حل الكابتشا
                     code = self.solver.solve(image_bytes)
                     
-                    # الفلترة الذكية (Validation Logic)
+                    # الفلترة الذكية
                     is_valid, reason = self._validate_captcha_code(code)
                     
                     if not is_valid:
@@ -99,7 +99,7 @@ class DiploBot:
                     print(f"   🧩 تم الحل: {code}")
                     page.fill("input[name='captchaText']", code)
                     
-                    # الضغط على Enter (أسرع من البحث عن الزر)
+                    # الضغط على Enter
                     page.keyboard.press("Enter")
                     
                     # الانتظار الذكي للنتيجة
@@ -112,7 +112,6 @@ class DiploBot:
                         print(f"   ✅ نجاح الكابتشا ({context})")
                         return True
                     except:
-                        # إذا بقيت الكابتشا ظاهرة، فهذا يعني فشل الحل
                         print(f"   ❌ الكود غير صحيح، المحاولة التالية...")
                         
                 finally:
@@ -152,14 +151,13 @@ class DiploBot:
                     page.wait_for_timeout(1500)
                     return
             except: pass
-        # الملاذ الأخير: تحديث الصفحة
         page.reload()
 
     def smart_fill_by_label(self, page, keywords, value):
         """التوجيه الدلالي: البحث عن الحقل عبر عنوانه"""
         try:
             for word in keywords:
-                # XPath للبحث عن Label يحتوي النص (غير حساس لحالة الأحرف)
+                # XPath للبحث عن Label
                 label = page.locator(f"//label[contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), '{word.lower()}')]")
                 if label.count() > 0:
                     target_id = label.first.get_attribute("for")
@@ -182,7 +180,6 @@ class DiploBot:
         best_val = None
         best_score = -10
         
-        # قاموس النقاط
         score_rules = {
             'student': 5, 'studium': 5, 'study': 5,
             'language': 3, 'sprach': 3, 'course': 2, 'kurs': 2,
@@ -208,7 +205,6 @@ class DiploBot:
             print(f"   ✅ تم اختيار: (Score: {best_score})")
             return True
         
-        # Fallback
         try:
             select.select_option(index=1)
             print("   ⚠️ تم اختيار الخيار الثاني (افتراضي)")
@@ -216,52 +212,82 @@ class DiploBot:
         except: return False
 
     def fill_booking_form_enhanced(self, page):
-        """تعبئة الاستمارة الكاملة"""
+        """تعبئة الاستمارة الكاملة (مع تحسين الانتظار)"""
         print("📝 بدء تعبئة الاستمارة...")
         try:
-            # 1. الأسماء والإيميل
+            # 1. الانتظار الذكي (زيادة المهلة إلى 60 ثانية)
+            try:
+                page.wait_for_selector(
+                    "input[name='lastname'], input[name='captchaText'], div.error", 
+                    state="visible", 
+                    timeout=60000
+                )
+            except:
+                print("❌ انتهت مهلة انتظار الاستمارة (الصفحة لم تفتح).")
+                page.screenshot(path="timeout_debug.png")
+                return False
+
+            # 2. التحقق: هل عدنا للكابتشا؟
+            if page.locator("input[name='captchaText']").is_visible():
+                print("⚠️ يبدو أننا عدنا لصفحة الكابتشا (الكود السابق كان خاطئاً رغم القبول المبدئي).")
+                return False 
+
+            if not page.locator("input[name='lastname']").is_visible():
+                print("❌ حقل الاسم غير موجود (قد يكون خطأ في تحميل الصفحة).")
+                return False
+
+            print("✅ تم تحميل الاستمارة بنجاح. جاري التعبئة...")
+
+            # 3. الأسماء والإيميل
             page.fill("input[name='lastname']", Config.LAST_NAME)
             page.fill("input[name='firstname']", Config.FIRST_NAME)
             page.fill("input[name='email']", Config.EMAIL)
             
-            if page.locator("input[name*='emailrepeat'], input[name*='emailRepeat']").count() > 0:
-                page.locator("input[name*='emailrepeat'], input[name*='emailRepeat']").first.fill(Config.EMAIL)
+            email_repeat = page.locator("input[name*='emailrepeat'], input[name*='emailRepeat'], input[name*='confirm']").first
+            if email_repeat.is_visible():
+                email_repeat.fill(Config.EMAIL)
 
-            # 2. الحقول الذكية
-            if not self.smart_fill_by_label(page, ["Passport", "Reisepass", "Passeport"], Config.PASSPORT):
-                if page.locator("input[name='fields[0].content']").is_visible():
+            # 4. الحقول الذكية (جواز / هاتف)
+            passport_filled = self.smart_fill_by_label(page, ["Passport", "Reisepass", "Passeport", "No."], Config.PASSPORT)
+            if not passport_filled:
+                if page.locator("input[name*='passport']").count() > 0:
+                    page.locator("input[name*='passport']").first.fill(Config.PASSPORT)
+                elif page.locator("input[name='fields[0].content']").is_visible():
                     page.fill("input[name='fields[0].content']", Config.PASSPORT)
 
-            if not self.smart_fill_by_label(page, ["Phone", "Telephone", "Telefon", "Mobile"], Config.PHONE):
-                if page.locator("input[name='fields[1].content']").is_visible():
+            phone_filled = self.smart_fill_by_label(page, ["Phone", "Telephone", "Telefon", "Mobile"], Config.PHONE)
+            if not phone_filled:
+                 if page.locator("input[name*='phone']").count() > 0:
+                    page.locator("input[name*='phone']").first.fill(Config.PHONE)
+                 elif page.locator("input[name='fields[1].content']").is_visible():
                     page.fill("input[name='fields[1].content']", Config.PHONE)
 
-            # 3. اختيار التأشيرة
+            # 5. اختيار التأشيرة
             self.select_visa_type_smart(page)
 
-            # 4. كابتشا الإرسال النهائي
-            if not self.handle_captcha_smart(page, "final_submit", max_refreshes=10):
+            # 6. كابتشا الإرسال النهائي
+            if not self.handle_captcha_smart(page, "final_submit", max_refreshes=15):
                 print("❌ فشل كابتشا الاستمارة")
                 return False
 
-            # 5. التوثيق
+            # 7. التوثيق قبل الإرسال
             ts = self.get_timestamp()
             screenshot_path = f"form_ready_{ts}.png"
             page.screenshot(path=screenshot_path)
             send_photo(screenshot_path, caption="🚨 Form Filled! Submitting...")
 
-            # 6. الإرسال
+            # 8. الإرسال
             print("🚀 إرسال الطلب نهائياً...")
             page.keyboard.press("Enter")
             
-            # 7. انتظار النتيجة
-            page.wait_for_timeout(5000)
+            # 9. انتظار النتيجة (زيادة المهلة)
+            page.wait_for_timeout(10000)
             result_path = f"result_{ts}.png"
             page.screenshot(path=result_path)
             
             # التحقق
             content = page.content().lower()
-            if "success" in content or "termin" in content or "barcode" in content:
+            if "success" in content or "termin" in content or "barcode" in content or "appointment" in content:
                 print("✅✅✅ BOOKING SUCCESSFUL! ✅✅✅")
                 send_photo(result_path, caption="✅ BOOKING CONFIRMED!")
                 return True
@@ -278,7 +304,6 @@ class DiploBot:
     def run(self):
         """تشغيل البوت مع إعدادات التخفي (Stealth)"""
         with sync_playwright() as p:
-            # إعدادات المتصفح
             browser = p.chromium.launch(
                 headless=True,
                 args=[
@@ -297,7 +322,6 @@ class DiploBot:
             context.set_default_timeout(30000)
             
             page = context.new_page()
-            
             page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
 
             print(f"🚀 Sniper Active via Playwright. Target: {Config.TARGET_URL}")
