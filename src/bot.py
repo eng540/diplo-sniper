@@ -10,7 +10,6 @@ from .config import Config
 from .captcha import CaptchaSolver
 from .notifier import send_alert, send_photo
 
-# ... (نفس الإعدادات السابقة) ...
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s [%(levelname)s] %(message)s',
@@ -44,8 +43,9 @@ class DiploBot:
         return urls
 
     def refresh_captcha(self, page):
+        """طلب صورة جديدة"""
         try:
-            logger.info("   -> 🔄 Refreshing Captcha Image...")
+            logger.info("   -> 🔄 Refreshing Captcha (Image too hard)...")
             refresh_btn = page.locator("input[name^='action:appointment_refreshCaptcha']").first
             if refresh_btn.is_visible():
                 refresh_btn.click()
@@ -67,8 +67,16 @@ class DiploBot:
                 if captcha_element.is_visible():
                     page.wait_for_timeout(800)
                     captcha_bytes = captcha_element.screenshot()
+                    
+                    # الحل باستخدام المعالج الذكي
                     code = self.solver.solve(captcha_bytes)
                     
+                    # 1. استراتيجية "انتقاء الكرز": إذا الصورة صعبة، غيرها فوراً
+                    if code == "REFRESH":
+                        self.refresh_captcha(page)
+                        continue
+
+                    # 2. فلترة الطول
                     if len(code) != 6:
                         logger.warning(f"⚠️ Invalid length ({len(code)}). Refreshing...")
                         self.refresh_captcha(page)
@@ -85,17 +93,15 @@ class DiploBot:
                     except:
                         pass
 
-                    # فحص النتيجة
                     if page.locator("input[name='captchaText']").is_visible():
                         logger.warning("❌ Captcha failed. Refreshing image...")
                         self.refresh_captcha(page)
                         continue 
                     
-                    # فحص هل ظهر خطأ؟
                     content = page.content().lower()
                     if "error occurred" in content or "ref-id" in content:
-                        logger.error("❌ Critical Error Page detected after captcha.")
-                        return False # فشل ذريع
+                        logger.error("❌ Critical Error Page detected.")
+                        return False
 
                     logger.info("✅ Captcha passed.")
                     return True
@@ -137,7 +143,6 @@ class DiploBot:
                         logger.info(f"🎯 Smart Match: '{text}'")
                         return
             
-            # Fallback
             select_locator.select_option(index=1)
         except: pass
 
@@ -188,11 +193,9 @@ class DiploBot:
 
             self.select_visa_category(page)
 
-            # كابتشا الإرسال (هنا يحدث الإرسال الفعلي)
             if not self.handle_captcha(page, max_retries=10):
                 return False
             
-            # --- تمت إزالة الضغطة الزائدة هنا ---
             logger.info("🚨 Form Submitted via Captcha Enter. Verifying...")
             
             page.wait_for_timeout(5000)
@@ -231,7 +234,7 @@ class DiploBot:
             context.set_default_timeout(60000)
             
             logger.info(f"🚀 Sniper Active. Target: {Config.TARGET_URL}")
-            send_alert("🚀 Diplo Sniper V10 (Final Fix) Started...")
+            send_alert("🚀 Diplo Sniper V11 (Image Processing) Started...")
             
             while True:
                 month_urls = self.get_month_urls()
