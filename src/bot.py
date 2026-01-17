@@ -10,7 +10,7 @@ from .config import Config
 from .captcha import CaptchaSolver
 from .notifier import send_alert, send_photo
 
-# إعداد نظام السجلات الاحترافي
+# ... (نفس الإعدادات السابقة) ...
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s [%(levelname)s] %(message)s',
@@ -35,7 +35,6 @@ class DiploBot:
         else:
             base_clean = self.base_url_template
 
-        # نبدأ من الشهر القادم مباشرة لزيادة الكفاءة
         for i in range(6): 
             future_month = (today.month + i - 1) % 12 + 1
             future_year = today.year + ((today.month + i - 1) // 12)
@@ -45,7 +44,6 @@ class DiploBot:
         return urls
 
     def refresh_captcha(self, page):
-        """تحديث الصورة للحصول على واحدة أسهل"""
         try:
             logger.info("   -> 🔄 Refreshing Captcha Image...")
             refresh_btn = page.locator("input[name^='action:appointment_refreshCaptcha']").first
@@ -58,7 +56,6 @@ class DiploBot:
         return False
 
     def handle_captcha(self, page, max_retries=10):
-        """استراتيجية الكابتشا: الفلترة الصارمة + التحديث الفوري"""
         for attempt in range(max_retries):
             try:
                 if not page.locator("input[name='captchaText']").is_visible():
@@ -72,7 +69,6 @@ class DiploBot:
                     captcha_bytes = captcha_element.screenshot()
                     code = self.solver.solve(captcha_bytes)
                     
-                    # فلترة الطول: إذا لم يكن 6، اطلب صورة جديدة فوراً
                     if len(code) != 6:
                         logger.warning(f"⚠️ Invalid length ({len(code)}). Refreshing...")
                         self.refresh_captcha(page)
@@ -81,7 +77,6 @@ class DiploBot:
                     logger.info(f"🧩 Decoded: {code}")
                     page.fill("input[name='captchaText']", code)
                     
-                    # استخدام Enter (الأكثر موثوقية)
                     logger.info("   -> Pressing Enter...")
                     page.keyboard.press("Enter")
                     
@@ -90,14 +85,20 @@ class DiploBot:
                     except:
                         pass
 
-                    # إذا بقينا في نفس الصفحة، نحدث الصورة
+                    # فحص النتيجة
                     if page.locator("input[name='captchaText']").is_visible():
                         logger.warning("❌ Captcha failed. Refreshing image...")
                         self.refresh_captcha(page)
                         continue 
-                    else:
-                        logger.info("✅ Captcha passed.")
-                        return True
+                    
+                    # فحص هل ظهر خطأ؟
+                    content = page.content().lower()
+                    if "error occurred" in content or "ref-id" in content:
+                        logger.error("❌ Critical Error Page detected after captcha.")
+                        return False # فشل ذريع
+
+                    logger.info("✅ Captcha passed.")
+                    return True
 
             except Exception as e:
                 logger.error(f"⚠️ Captcha Error: {e}")
@@ -108,7 +109,6 @@ class DiploBot:
     def smart_fill_by_label(self, page, keywords, value):
         try:
             for word in keywords:
-                # بحث دقيق عن Label
                 label_locator = page.locator(f"//label[contains(text(), '{word}')]")
                 if label_locator.count() > 0:
                     first_label = label_locator.first
@@ -121,70 +121,39 @@ class DiploBot:
             return False
 
     def select_visa_category(self, page):
-        """
-        اختيار فئة التأشيرة بذكاء شديد بناءً على النص الذي زودتني به
-        """
         try:
             select_locator = page.locator("select").first
-            if not select_locator.is_visible():
-                return
+            if not select_locator.is_visible(): return
 
-            # الكلمات المفتاحية مرتبة حسب الأولوية (اليمن أولاً)
-            priority_keywords = [
-                "yemeni national",  # الأولوية القصوى
-                "student visa",
-                "language course",
-                "studium",          # ألماني
-                "sprachkurs",       # ألماني
-                "university"
-            ]
-
+            priority_keywords = ["yemeni national", "student visa", "language course", "studium", "sprachkurs", "university"]
             options = select_locator.locator("option").all()
-            best_value = None
-            found_text = ""
-
+            
             for option in options:
                 text = option.text_content()
-                if not text: continue
-                
-                # فحص التطابق
-                for keyword in priority_keywords:
-                    if keyword.lower() in text.lower():
-                        best_value = option.get_attribute("value")
-                        found_text = text
-                        logger.info(f"🎯 Smart Match Found: '{text}'")
-                        break
-                if best_value: break
+                if text and any(k.lower() in text.lower() for k in priority_keywords):
+                    val = option.get_attribute("value")
+                    if val:
+                        select_locator.select_option(value=val)
+                        logger.info(f"🎯 Smart Match: '{text}'")
+                        return
             
-            if best_value:
-                select_locator.select_option(value=best_value)
-            else:
-                # الخيار الاحتياطي
-                logger.warning("⚠️ No keyword match found. Selecting index 1.")
-                select_locator.select_option(index=1)
-
-        except Exception as e:
-            logger.error(f"Visa selection error: {e}")
+            # Fallback
+            select_locator.select_option(index=1)
+        except: pass
 
     def extract_and_verify_success(self, page):
         content = page.content()
-        
         if "error occurred" in content.lower() or "ref-id" in content.lower():
-            logger.error("❌ FAILED: Error Page Detected.")
             return False, None
 
-        # مؤشرات النجاح القوية
         if "appointment number" in content.lower() or "successfully booked" in content.lower():
             details = "✅ BOOKING CONFIRMED!\n"
             match_num = re.search(r"Appointment number is\s+(\d+)", content, re.IGNORECASE)
             if match_num: details += f"🆔 App Num: {match_num.group(1)}\n"
-            
             match_date = re.search(r"(\d{2}\.\d{2}\.\d{4})", content)
             if match_date: details += f"📅 Date: {match_date.group(1)}\n"
-
             details += f"👤 Name: {Config.FIRST_NAME} {Config.LAST_NAME}"
             return True, details
-            
         return False, None
 
     def fill_booking_form(self, page):
@@ -193,7 +162,6 @@ class DiploBot:
             if not page.locator("input[name='lastname']").is_visible():
                 return False
 
-            # تعبئة الحقول الأساسية
             page.fill("input[name='lastname']", Config.LAST_NAME)
             page.fill("input[name='firstname']", Config.FIRST_NAME)
             page.fill("input[name='email']", Config.EMAIL)
@@ -203,7 +171,6 @@ class DiploBot:
             elif page.locator("input[name='emailRepeat']").is_visible():
                 page.fill("input[name='emailRepeat']", Config.EMAIL)
 
-            # الجواز
             passport_keywords = ["Passport", "Reisepass", "Passeport"]
             if not self.smart_fill_by_label(page, passport_keywords, Config.PASSPORT):
                 if page.locator("input[name='passportNumber']").is_visible():
@@ -211,7 +178,6 @@ class DiploBot:
                 elif page.locator("input[name='fields[0].content']").is_visible():
                     page.fill("input[name='fields[0].content']", Config.PASSPORT)
 
-            # الهاتف (تنظيف +)
             clean_phone = Config.PHONE.replace("+", "00").replace(" ", "").strip()
             phone_keywords = ["Phone", "Telephone", "Telefon", "Mobile"]
             if not self.smart_fill_by_label(page, phone_keywords, clean_phone):
@@ -220,17 +186,16 @@ class DiploBot:
                 elif page.locator("input[name='fields[1].content']").is_visible():
                     page.fill("input[name='fields[1].content']", clean_phone)
 
-            # اختيار التأشيرة (المنطق الجديد)
             self.select_visa_category(page)
 
-            # كابتشا الإرسال
+            # كابتشا الإرسال (هنا يحدث الإرسال الفعلي)
             if not self.handle_captcha(page, max_retries=10):
                 return False
             
-            logger.info("🚨 Submitting...")
-            page.keyboard.press("Enter")
-            page.wait_for_timeout(5000)
+            # --- تمت إزالة الضغطة الزائدة هنا ---
+            logger.info("🚨 Form Submitted via Captcha Enter. Verifying...")
             
+            page.wait_for_timeout(5000)
             success, details = self.extract_and_verify_success(page)
             ts = self.get_timestamp()
             
@@ -251,38 +216,22 @@ class DiploBot:
 
     def run(self):
         with sync_playwright() as p:
-            # إعدادات المتصفح المتخفي (Stealth) من الكود المطور
             browser = p.chromium.launch(
                 headless=True,
-                args=[
-                    "--disable-blink-features=AutomationControlled",
-                    "--no-sandbox",
-                    "--disable-setuid-sandbox",
-                    "--disable-dev-shm-usage",
-                    "--disable-gpu",
-                    "--no-first-run",
-                    "--disable-web-security"
-                ]
+                args=["--disable-blink-features=AutomationControlled", "--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage", "--disable-gpu", "--no-first-run", "--disable-web-security"]
             )
-            
-            # سياق متصفح واقعي
             context = browser.new_context(
                 user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
                 viewport={"width": 1366, "height": 768},
                 locale="en-US",
                 timezone_id="Europe/Berlin"
             )
-            
-            # إخفاء أثر الأتمتة
             page = context.new_page()
-            page.add_init_script("""
-                Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-            """)
-            
+            page.add_init_script("""Object.defineProperty(navigator, 'webdriver', { get: () => undefined });""")
             context.set_default_timeout(60000)
             
             logger.info(f"🚀 Sniper Active. Target: {Config.TARGET_URL}")
-            send_alert("🚀 Diplo Sniper V9 (Ultimate Stealth) Started...")
+            send_alert("🚀 Diplo Sniper V10 (Final Fix) Started...")
             
             while True:
                 month_urls = self.get_month_urls()
@@ -290,21 +239,16 @@ class DiploBot:
                     try:
                         date_part = url.split("dateStr=")[1] if "dateStr=" in url else "Unknown"
                         logger.info(f"🔎 Scanning: {date_part}")
+                        try: page.goto(url, wait_until="domcontentloaded")
+                        except: continue
                         
-                        try:
-                            page.goto(url, wait_until="domcontentloaded")
-                        except:
-                            continue
-                        
-                        if not self.handle_captcha(page):
-                            continue 
+                        if not self.handle_captcha(page): continue 
 
                         content = page.content()
                         if "Unfortunately, there are no appointments" in content or "keine Termine" in content:
                             time.sleep(random.uniform(2, 4)) 
                             continue
                         
-                        # --- وضع الحصار (Siege Mode) ---
                         while True:
                             day_link = page.locator("a.arrow[href*='appointment_showDay']").first
                             if not day_link.is_visible():
@@ -315,9 +259,8 @@ class DiploBot:
                             send_alert(f"🔥 DAY FOUND! {date_part} - Attacking...")
                             
                             day_link.click()
-                            
                             if not self.handle_captcha(page):
-                                logger.warning("   -> Captcha failed on Day. Retrying same slot...")
+                                logger.warning("   -> Captcha failed on Day. Retrying...")
                                 page.go_back()
                                 page.reload()
                                 continue
@@ -326,7 +269,6 @@ class DiploBot:
                             if time_link.is_visible():
                                 logger.info("⏰ TIME FOUND!")
                                 time_link.click()
-                                
                                 if not self.handle_captcha(page):
                                     logger.warning("   -> Captcha failed on Time. Retrying...")
                                     page.go_back()
@@ -340,12 +282,10 @@ class DiploBot:
                                     page.goto(url)
                                     continue
                             else:
-                                logger.warning("⚠️ Day open but time slots gone/hidden.")
+                                logger.warning("⚠️ Day open but time slots gone.")
                                 break
-
                     except Exception as e:
                         logger.error(f"⚠️ Loop Error: {e}")
                         time.sleep(5)
-                
                 logger.info("💤 Cycle done. Sleeping 60s...")
                 time.sleep(60)
