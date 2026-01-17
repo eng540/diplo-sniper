@@ -43,14 +43,13 @@ class DiploBot:
         return urls
 
     def refresh_captcha(self, page):
-        """طلب صورة جديدة"""
+        """تحديث الصفحة بالكامل لضمان صورة جديدة"""
         try:
-            logger.info("   -> 🔄 Refreshing Captcha (Image too hard)...")
-            refresh_btn = page.locator("input[name^='action:appointment_refreshCaptcha']").first
-            if refresh_btn.is_visible():
-                refresh_btn.click()
-                page.wait_for_timeout(2500)
-                return True
+            logger.info("   -> 🔄 Reloading Page for new Captcha...")
+            page.reload()
+            page.wait_for_load_state("domcontentloaded")
+            page.wait_for_timeout(2000)
+            return True
         except:
             pass
         return False
@@ -58,27 +57,24 @@ class DiploBot:
     def handle_captcha(self, page, max_retries=10):
         for attempt in range(max_retries):
             try:
-                if not page.locator("input[name='captchaText']").is_visible():
-                    return True 
+                # انتظار ظهور الكابتشا بعد التحديث
+                try:
+                    if not page.locator("input[name='captchaText']").is_visible(timeout=5000):
+                        return True 
+                except:
+                    return True
 
                 logger.info(f"🚧 [Captcha] Attempt {attempt+1}...")
                 captcha_element = page.locator("captcha > div").first
                 
                 if captcha_element.is_visible():
-                    page.wait_for_timeout(800)
+                    page.wait_for_timeout(1000)
                     captcha_bytes = captcha_element.screenshot()
-                    
-                    # الحل باستخدام المعالج الذكي
                     code = self.solver.solve(captcha_bytes)
                     
-                    # 1. استراتيجية "انتقاء الكرز": إذا الصورة صعبة، غيرها فوراً
-                    if code == "REFRESH":
-                        self.refresh_captcha(page)
-                        continue
-
-                    # 2. فلترة الطول
+                    # فلترة الطول
                     if len(code) != 6:
-                        logger.warning(f"⚠️ Invalid length ({len(code)}). Refreshing...")
+                        logger.warning(f"⚠️ Invalid length ({len(code)}: {code}). Reloading...")
                         self.refresh_captcha(page)
                         continue
                     
@@ -94,7 +90,7 @@ class DiploBot:
                         pass
 
                     if page.locator("input[name='captchaText']").is_visible():
-                        logger.warning("❌ Captcha failed. Refreshing image...")
+                        logger.warning("❌ Captcha failed. Reloading...")
                         self.refresh_captcha(page)
                         continue 
                     
@@ -234,7 +230,7 @@ class DiploBot:
             context.set_default_timeout(60000)
             
             logger.info(f"🚀 Sniper Active. Target: {Config.TARGET_URL}")
-            send_alert("🚀 Diplo Sniper V11 (Image Processing) Started...")
+            send_alert("🚀 Diplo Sniper V13 (Reload Fix) Started...")
             
             while True:
                 month_urls = self.get_month_urls()
