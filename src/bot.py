@@ -48,7 +48,7 @@ class DiploBot:
             logger.info("   -> 🔄 Reloading Page for new Captcha...")
             page.reload()
             page.wait_for_load_state("domcontentloaded")
-            page.wait_for_timeout(2000)
+            page.wait_for_timeout(3000) # زيادة وقت الانتظار للتحميل
             return True
         except:
             pass
@@ -57,7 +57,6 @@ class DiploBot:
     def handle_captcha(self, page, max_retries=10):
         for attempt in range(max_retries):
             try:
-                # انتظار ظهور الكابتشا بعد التحديث
                 try:
                     if not page.locator("input[name='captchaText']").is_visible(timeout=5000):
                         return True 
@@ -68,13 +67,20 @@ class DiploBot:
                 captcha_element = page.locator("captcha > div").first
                 
                 if captcha_element.is_visible():
-                    page.wait_for_timeout(1000)
+                    # انتظار أطول لضمان ظهور الصورة
+                    page.wait_for_timeout(2000)
+                    
                     captcha_bytes = captcha_element.screenshot()
                     code = self.solver.solve(captcha_bytes)
                     
-                    # فلترة الطول
-                    if len(code) != 6:
-                        logger.warning(f"⚠️ Invalid length ({len(code)}: {code}). Reloading...")
+                    # --- كاشف الأخطاء والفلترة ---
+                    if code == "4333" or len(code) != 6:
+                        logger.warning(f"⚠️ Suspicious Code ({code}). Taking Debug Photo...")
+                        ts = self.get_timestamp()
+                        # نرسل صورة لنعرف السبب الحقيقي
+                        page.screenshot(path=f"debug_captcha_{ts}.png")
+                        send_photo(f"debug_captcha_{ts}.png", caption=f"⚠️ Debug: Captcha Issue ({code})")
+                        
                         self.refresh_captcha(page)
                         continue
                     
@@ -230,7 +236,7 @@ class DiploBot:
             context.set_default_timeout(60000)
             
             logger.info(f"🚀 Sniper Active. Target: {Config.TARGET_URL}")
-            send_alert("🚀 Diplo Sniper V13 (Reload Fix) Started...")
+            send_alert("🚀 Diplo Sniper V14 (Detective Mode) Started...")
             
             while True:
                 month_urls = self.get_month_urls()
