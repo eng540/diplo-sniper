@@ -33,8 +33,23 @@ class DiploBot:
             urls.append(full_url)
         return urls
 
+    def refresh_captcha(self, page):
+        """دالة مساعدة لتحديث صورة الكابتشا"""
+        try:
+            print("   -> 🔄 Refreshing Captcha Image...")
+            # البحث عن زر التحديث بأي لغة
+            refresh_btn = page.locator("input[name^='action:appointment_refreshCaptcha']").first
+            if refresh_btn.is_visible():
+                refresh_btn.click()
+                # انتظار تحميل الصورة الجديدة
+                page.wait_for_timeout(2500)
+                return True
+        except:
+            pass
+        return False
+
     def handle_captcha(self, page, max_retries=5):
-        """استراتيجية ذكية: فلترة الطول + Enter"""
+        """استراتيجية: الحل السريع أو التغيير الفوري"""
         for attempt in range(max_retries):
             try:
                 if not page.locator("input[name='captchaText']").is_visible():
@@ -48,23 +63,15 @@ class DiploBot:
                     captcha_bytes = captcha_element.screenshot()
                     code = self.solver.solve(captcha_bytes)
                     
-                    # --- فلترة الطول (أهم تحديث) ---
+                    # --- التحديث 1: إذا الطول خطأ، غير الصورة فوراً ---
                     if len(code) != 6:
-                        print(f"⚠️ Invalid length ({len(code)}). Refreshing...")
-                        # محاولة تحديث الصورة
-                        refresh_btn = page.locator("input[name^='action:appointment_refreshCaptcha']").first
-                        if refresh_btn.is_visible():
-                            refresh_btn.click()
-                            page.wait_for_timeout(2000)
-                        else:
-                            # إذا لم يوجد زر تحديث، نعيد تحميل الصفحة
-                            page.reload()
+                        print(f"⚠️ Invalid length ({len(code)}). Requesting new image...")
+                        self.refresh_captcha(page)
                         continue
                     
                     print(f"🧩 Decoded: {code}")
                     page.fill("input[name='captchaText']", code)
                     
-                    # استخدام Enter (الطريقة الموثوقة)
                     print("   -> Pressing Enter...")
                     page.keyboard.press("Enter")
                     
@@ -73,8 +80,10 @@ class DiploBot:
                     except:
                         pass
 
+                    # --- التحديث 2: إذا فشل الحل، غير الصورة فوراً ---
                     if page.locator("input[name='captchaText']").is_visible():
-                        print("❌ Captcha failed. Retrying...")
+                        print("❌ Captcha failed. Requesting new image for better luck...")
+                        self.refresh_captcha(page)
                         continue 
                     else:
                         print("✅ Captcha passed.")
@@ -126,7 +135,7 @@ class DiploBot:
             elif page.locator("input[name='emailRepeat']").is_visible():
                 page.fill("input[name='emailRepeat']", Config.EMAIL)
 
-            # 2. الحقول الذكية
+            # 2. الحقول الذكية (جواز وهاتف)
             passport_keywords = ["Passport", "Reisepass", "Passeport"]
             if not self.smart_fill_by_label(page, passport_keywords, Config.PASSPORT):
                 if page.locator("input[name='passportNumber']").is_visible():
@@ -134,15 +143,22 @@ class DiploBot:
                 elif page.locator("input[name='fields[0].content']").is_visible():
                     page.fill("input[name='fields[0].content']", Config.PASSPORT)
 
+            # تنظيف رقم الهاتف
+            clean_phone = Config.PHONE.replace("+", "00").replace(" ", "").strip()
             phone_keywords = ["Phone", "Telephone", "Telefon", "Mobile"]
-            if not self.smart_fill_by_label(page, phone_keywords, Config.PHONE):
+            if not self.smart_fill_by_label(page, phone_keywords, clean_phone):
                 if page.locator("input[name='phone']").is_visible():
-                    page.fill("input[name='phone']", Config.PHONE)
+                    page.fill("input[name='phone']", clean_phone)
                 elif page.locator("input[name='fields[1].content']").is_visible():
-                    page.fill("input[name='fields[1].content']", Config.PHONE)
+                    page.fill("input[name='fields[1].content']", clean_phone)
 
-            # 3. القوائم المنسدلة (الذكية)
-            study_keywords = ["Study", "Student", "Studium", "University", "Bachelor", "Master", "PhD", "School"]
+            # 3. القوائم المنسدلة (الاختيار الدلالي الذكي)
+            # كلمات مفتاحية قوية جداً تغطي الإنجليزي والألماني والجملة الطويلة
+            target_keywords = [
+                "student", "language course", "studium", "sprachkurs", 
+                "university", "yemeni national", "bachelor", "master"
+            ]
+            
             selects = page.locator("select").all()
             for select in selects:
                 if select.is_visible():
@@ -151,7 +167,10 @@ class DiploBot:
                         options = select.locator("option").all()
                         for option in options:
                             text = option.text_content()
-                            if text and any(keyword.lower() in text.lower() for keyword in study_keywords):
+                            if not text: continue
+                            
+                            # فحص هل النص يحتوي على أي من الكلمات المفتاحية
+                            if any(keyword.lower() in text.lower() for keyword in target_keywords):
                                 value = option.get_attribute("value")
                                 if value:
                                     select.select_option(value=value)
@@ -160,9 +179,12 @@ class DiploBot:
                                     break
                     except:
                         pass
+                    
+                    # إذا لم نجد تطابقاً، نختار الخيار الثاني كحل أخير
                     if not found_smart_option:
                         try:
                             select.select_option(index=1)
+                            print("   -> Fallback: Selected index 1")
                         except:
                             pass
 
@@ -176,7 +198,7 @@ class DiploBot:
             page.screenshot(path=f"form_filled_{ts}.png")
             send_photo(f"form_filled_{ts}.png", caption="🚨 Submitting Form...")
             
-            # 5. الإرسال النهائي (Enter)
+            # 5. الإرسال النهائي
             page.keyboard.press("Enter")
             
             page.wait_for_timeout(5000)
@@ -206,7 +228,7 @@ class DiploBot:
             page = context.new_page()
             
             print(f"🚀 Sniper Active. Target: {Config.TARGET_URL}")
-            send_alert("🚀 Diplo Sniper V6 (Smart Filter) Started...")
+            send_alert("🚀 Diplo Sniper V7 (Smart Refresh) Started...")
             
             while True:
                 month_urls = self.get_month_urls()
