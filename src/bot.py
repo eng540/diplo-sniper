@@ -22,7 +22,6 @@ class DiploBot:
         self.solver = CaptchaSolver()
         self.base_url_template = Config.TARGET_URL + "&request_locale=en"
         self.debug_photo_sent = False
-        # قائمة User-Agents لتدوير البصمة
         self.user_agents = [
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
@@ -49,12 +48,10 @@ class DiploBot:
         return urls
 
     def type_like_human(self, page, selector, text):
-        """الكتابة ببطء مثل البشر"""
         for char in text:
             page.type(selector, char, delay=random.randint(50, 150))
             
     def create_context(self, browser):
-        """إنشاء سياق جديد بهوية مختلفة (تصفير الذاكرة)"""
         ua = random.choice(self.user_agents)
         context = browser.new_context(
             user_agent=ua,
@@ -63,17 +60,31 @@ class DiploBot:
             timezone_id="Europe/Berlin"
         )
         page = context.new_page()
-        # إخفاء الأتمتة
         page.add_init_script("""Object.defineProperty(navigator, 'webdriver', { get: () => undefined });""")
         context.set_default_timeout(60000)
         return context, page
 
+    def refresh_captcha(self, page):
+        try:
+            logger.info("   -> 🔄 Refreshing Captcha...")
+            refresh_btn = page.locator("input[name^='action:appointment_refreshCaptcha']").first
+            if refresh_btn.is_visible():
+                refresh_btn.click()
+                page.wait_for_timeout(3000)
+                return True
+            else:
+                page.reload()
+                page.wait_for_load_state("domcontentloaded")
+                return True
+        except:
+            pass
+        return False
+
     def handle_captcha(self, page, context, max_retries=5):
-        """معالجة الكابتشا مع استراتيجية الهروب (إعادة إنشاء السياق)"""
         for attempt in range(max_retries):
             try:
                 if not page.locator("input[name='captchaText']").is_visible():
-                    return True, page # نجاح، نرجع الصفحة الحالية
+                    return True, page 
 
                 logger.info(f"🚧 [Captcha] Attempt {attempt+1}...")
                 captcha_element = page.locator("captcha > div").first
@@ -83,17 +94,14 @@ class DiploBot:
                     captcha_bytes = captcha_element.screenshot()
                     code = self.solver.solve(captcha_bytes)
                     
-                    # 1. فلترة الطول الصارمة
                     if len(code) != 6:
                         logger.warning(f"⚠️ Invalid length ({len(code)}). Hard Resetting...")
-                        # الحل الجذري: إغلاق الصفحة وحذف الكوكيز
                         context.clear_cookies()
                         page.reload()
                         page.wait_for_load_state("domcontentloaded")
                         continue
                     
                     logger.info(f"🧩 Decoded: {code}")
-                    # الكتابة البشرية
                     self.type_like_human(page, "input[name='captchaText']", code)
                     
                     logger.info("   -> Pressing Enter...")
@@ -178,6 +186,7 @@ class DiploBot:
             if not page.locator("input[name='lastname']").is_visible():
                 return False
 
+            # تعبئة الحقول (مرة واحدة فقط)
             self.type_like_human(page, "input[name='lastname']", Config.LAST_NAME)
             self.type_like_human(page, "input[name='firstname']", Config.FIRST_NAME)
             self.type_like_human(page, "input[name='email']", Config.EMAIL)
@@ -204,27 +213,44 @@ class DiploBot:
 
             self.select_visa_category(page)
 
-            # كابتشا الإرسال
-            success, page = self.handle_captcha(page, context)
-            if not success:
-                return False
-            
-            logger.info("🚨 Form Submitted via Captcha Enter. Verifying...")
-            
-            page.wait_for_timeout(5000)
-            success, details = self.extract_and_verify_success(page)
-            ts = self.get_timestamp()
-            
-            if success:
-                logger.info(details)
-                page.screenshot(path=f"success_{ts}.png")
-                send_photo(f"success_{ts}.png", caption=details)
-                return True
-            else:
-                logger.error("❌ Booking Failed (Error Page).")
-                page.screenshot(path=f"error_{ts}.png")
-                send_photo(f"error_{ts}.png", caption="❌ Booking Failed (See Image)")
-                return False
+            # حلقة الإصرار على الإرسال
+            for attempt in range(5):
+                logger.info(f"🚀 Submission Attempt {attempt+1}/5...")
+                
+                success, page = self.handle_captcha(page, context)
+                if not success:
+                    # التحقق من بقاء النموذج
+                    if page.locator("input[name='lastname']").is_visible():
+                        logger.warning("   -> Captcha failed but form is safe. Retrying...")
+                        continue
+                    else:
+                        logger.error("❌ Lost form page.")
+                        return False
+
+                logger.info("🚨 Form Submitted via Captcha Enter. Verifying...")
+                page.wait_for_timeout(5000)
+                
+                success_verify, details = self.extract_and_verify_success(page)
+                ts = self.get_timestamp()
+                
+                if success_verify:
+                    logger.info(details)
+                    page.screenshot(path=f"success_{ts}.png")
+                    send_photo(f"success_{ts}.png", caption=details)
+                    return True
+                
+                content = page.content().lower()
+                if "error occurred" in content or "ref-id" in content:
+                    logger.error("❌ Booking Failed (Error Page).")
+                    page.screenshot(path=f"error_{ts}.png")
+                    send_photo(f"error_{ts}.png", caption="❌ Booking Failed (See Image)")
+                    return False
+                
+                if page.locator("input[name='lastname']").is_visible():
+                    logger.warning("⚠️ Still on form page. Retrying submission...")
+                    continue
+
+            return False
 
         except Exception as e:
             logger.error(f"❌ Form Error: {e}")
@@ -237,11 +263,10 @@ class DiploBot:
                 args=["--disable-blink-features=AutomationControlled", "--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage", "--disable-gpu", "--no-first-run", "--disable-web-security"]
             )
             
-            # إنشاء السياق الأول
             context, page = self.create_context(browser)
             
             logger.info(f"🚀 Sniper Active. Target: {Config.TARGET_URL}")
-            send_alert("🚀 Diplo Sniper V20 (Ghost Protocol) Started...")
+            send_alert("🚀 Diplo Sniper V21 (Persistent) Started...")
             
             while True:
                 month_urls = self.get_month_urls()
@@ -252,7 +277,6 @@ class DiploBot:
                         try: page.goto(url, wait_until="domcontentloaded")
                         except: continue
                         
-                        # نمرر الـ context لدالة الكابتشا لإعادة تعيينه عند الحاجة
                         success, page = self.handle_captcha(page, context)
                         if not success: continue 
 
@@ -300,7 +324,6 @@ class DiploBot:
                                 break
                     except Exception as e:
                         logger.error(f"⚠️ Loop Error: {e}")
-                        # في حال الخطأ الكبير، نجدد الجلسة بالكامل
                         context.close()
                         context, page = self.create_context(browser)
                         time.sleep(5)
