@@ -43,13 +43,15 @@ class DiploBot:
         return urls
 
     def refresh_captcha(self, page):
-        """تحديث الصفحة بالكامل لضمان صورة جديدة"""
+        """تحديث الصورة مع انتظار كافٍ"""
         try:
-            logger.info("   -> 🔄 Reloading Page for new Captcha...")
-            page.reload()
-            page.wait_for_load_state("domcontentloaded")
-            page.wait_for_timeout(3000) # زيادة وقت الانتظار للتحميل
-            return True
+            logger.info("   -> 🔄 Refreshing Captcha...")
+            refresh_btn = page.locator("input[name^='action:appointment_refreshCaptcha']").first
+            if refresh_btn.is_visible():
+                refresh_btn.click()
+                # زيادة الانتظار لضمان عدم ظهور المربع الأسود
+                page.wait_for_timeout(4000)
+                return True
         except:
             pass
         return False
@@ -57,30 +59,20 @@ class DiploBot:
     def handle_captcha(self, page, max_retries=10):
         for attempt in range(max_retries):
             try:
-                try:
-                    if not page.locator("input[name='captchaText']").is_visible(timeout=5000):
-                        return True 
-                except:
-                    return True
+                if not page.locator("input[name='captchaText']").is_visible():
+                    return True 
 
                 logger.info(f"🚧 [Captcha] Attempt {attempt+1}...")
                 captcha_element = page.locator("captcha > div").first
                 
                 if captcha_element.is_visible():
-                    # انتظار أطول لضمان ظهور الصورة
-                    page.wait_for_timeout(2000)
-                    
+                    page.wait_for_timeout(1500)
                     captcha_bytes = captcha_element.screenshot()
                     code = self.solver.solve(captcha_bytes)
                     
-                    # --- كاشف الأخطاء والفلترة ---
-                    if code == "4333" or len(code) != 6:
-                        logger.warning(f"⚠️ Suspicious Code ({code}). Taking Debug Photo...")
-                        ts = self.get_timestamp()
-                        # نرسل صورة لنعرف السبب الحقيقي
-                        page.screenshot(path=f"debug_captcha_{ts}.png")
-                        send_photo(f"debug_captcha_{ts}.png", caption=f"⚠️ Debug: Captcha Issue ({code})")
-                        
+                    # فلترة الطول (صمام الأمان)
+                    if len(code) != 6:
+                        logger.warning(f"⚠️ Invalid length ({len(code)}: {code}). Refreshing...")
                         self.refresh_captcha(page)
                         continue
                     
@@ -96,7 +88,7 @@ class DiploBot:
                         pass
 
                     if page.locator("input[name='captchaText']").is_visible():
-                        logger.warning("❌ Captcha failed. Reloading...")
+                        logger.warning("❌ Captcha failed. Refreshing image...")
                         self.refresh_captcha(page)
                         continue 
                     
@@ -236,7 +228,7 @@ class DiploBot:
             context.set_default_timeout(60000)
             
             logger.info(f"🚀 Sniper Active. Target: {Config.TARGET_URL}")
-            send_alert("🚀 Diplo Sniper V14 (Detective Mode) Started...")
+            send_alert("🚀 Diplo Sniper V15 (Clean Image) Started...")
             
             while True:
                 month_urls = self.get_month_urls()
