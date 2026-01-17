@@ -10,7 +10,6 @@ from .config import Config
 from .captcha import CaptchaSolver
 from .notifier import send_alert, send_photo
 
-# إعداد السجلات
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s [%(levelname)s] %(message)s',
@@ -44,7 +43,6 @@ class DiploBot:
         return urls
 
     def refresh_captcha(self, page):
-        """تحديث الصورة مع انتظار كافٍ"""
         try:
             logger.info("   -> 🔄 Refreshing Captcha...")
             refresh_btn = page.locator("input[name^='action:appointment_refreshCaptcha']").first
@@ -57,10 +55,11 @@ class DiploBot:
         return False
 
     def handle_captcha(self, page, max_retries=10):
-        """معالجة الكابتشا بمرونة (5-8 حروف)"""
         for attempt in range(max_retries):
             try:
                 if not page.locator("input[name='captchaText']").is_visible():
+                    # تسجيل أننا لم نجد كابتشا (للتوضيح)
+                    # logger.info("   -> No captcha found on this page.") 
                     return True 
 
                 logger.info(f"🚧 [Captcha] Attempt {attempt+1}...")
@@ -71,7 +70,6 @@ class DiploBot:
                     captcha_bytes = captcha_element.screenshot()
                     code = self.solver.solve(captcha_bytes)
                     
-                    # التعديل الجديد: قبول الأكواد من 5 إلى 8 حروف
                     if len(code) < 5 or len(code) > 8:
                         logger.warning(f"⚠️ Invalid length ({len(code)}: {code}). Refreshing...")
                         self.refresh_captcha(page)
@@ -178,7 +176,6 @@ class DiploBot:
                 elif page.locator("input[name='fields[0].content']").is_visible():
                     page.fill("input[name='fields[0].content']", Config.PASSPORT)
 
-            # تنظيف رقم الهاتف (إزالة +)
             clean_phone = Config.PHONE.replace("+", "00").replace(" ", "").strip()
             phone_keywords = ["Phone", "Telephone", "Telefon", "Mobile"]
             if not self.smart_fill_by_label(page, phone_keywords, clean_phone):
@@ -230,7 +227,7 @@ class DiploBot:
             context.set_default_timeout(60000)
             
             logger.info(f"🚀 Sniper Active. Target: {Config.TARGET_URL}")
-            send_alert("🚀 Diplo Sniper V16 (Flexible Captcha) Started...")
+            send_alert("🚀 Diplo Sniper V17 (Verbose Logs) Started...")
             
             while True:
                 month_urls = self.get_month_urls()
@@ -238,10 +235,16 @@ class DiploBot:
                     try:
                         date_part = url.split("dateStr=")[1] if "dateStr=" in url else "Unknown"
                         logger.info(f"🔎 Scanning: {date_part}")
-                        try: page.goto(url, wait_until="domcontentloaded")
-                        except: continue
                         
-                        if not self.handle_captcha(page): continue 
+                        try:
+                            page.goto(url, wait_until="domcontentloaded")
+                        except Exception as e:
+                            # طباعة الخطأ بوضوح
+                            logger.error(f"   -> 🛑 Connection Failed: {e}")
+                            continue
+                        
+                        if not self.handle_captcha(page):
+                            continue 
 
                         content = page.content()
                         if "Unfortunately, there are no appointments" in content or "keine Termine" in content:
