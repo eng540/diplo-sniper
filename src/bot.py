@@ -289,5 +289,13 @@ class DiploBot:
                     except Exception as e:
                         logger.error(f"⚠️ Loop Error: {e}")
                         time.sleep(5)
-                logger.info("💤 Cycle done. Sleeping 60s...")
-                time.sleep(60)
+                # حساب وقت نوم عشوائي لتجنب كشف النمط
+                sleep_time = random.randint(45, 95)
+                logger.info(f"💤 Cycle done. Sleeping {sleep_time}s (Randomized)...")
+                time.sleep(sleep_time)
+                
+                # كل 15 دورة، نأخذ استراحة طويلة (محاكاة بشرية)
+                if random.random() < 0.1: # احتمال 10%
+                    long_break = random.randint(180, 300)
+                    logger.info(f"☕ Taking a coffee break for {long_break}s...")
+                    time.sleep(long_break))
