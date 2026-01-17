@@ -10,6 +10,7 @@ from .config import Config
 from .captcha import CaptchaSolver
 from .notifier import send_alert, send_photo
 
+# إعداد السجلات
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s [%(levelname)s] %(message)s',
@@ -49,14 +50,14 @@ class DiploBot:
             refresh_btn = page.locator("input[name^='action:appointment_refreshCaptcha']").first
             if refresh_btn.is_visible():
                 refresh_btn.click()
-                # زيادة الانتظار لضمان عدم ظهور المربع الأسود
-                page.wait_for_timeout(4000)
+                page.wait_for_timeout(3000)
                 return True
         except:
             pass
         return False
 
     def handle_captcha(self, page, max_retries=10):
+        """معالجة الكابتشا بمرونة (5-8 حروف)"""
         for attempt in range(max_retries):
             try:
                 if not page.locator("input[name='captchaText']").is_visible():
@@ -70,8 +71,8 @@ class DiploBot:
                     captcha_bytes = captcha_element.screenshot()
                     code = self.solver.solve(captcha_bytes)
                     
-                    # فلترة الطول (صمام الأمان)
-                    if len(code) != 6:
+                    # التعديل الجديد: قبول الأكواد من 5 إلى 8 حروف
+                    if len(code) < 5 or len(code) > 8:
                         logger.warning(f"⚠️ Invalid length ({len(code)}: {code}). Refreshing...")
                         self.refresh_captcha(page)
                         continue
@@ -177,6 +178,7 @@ class DiploBot:
                 elif page.locator("input[name='fields[0].content']").is_visible():
                     page.fill("input[name='fields[0].content']", Config.PASSPORT)
 
+            # تنظيف رقم الهاتف (إزالة +)
             clean_phone = Config.PHONE.replace("+", "00").replace(" ", "").strip()
             phone_keywords = ["Phone", "Telephone", "Telefon", "Mobile"]
             if not self.smart_fill_by_label(page, phone_keywords, clean_phone):
@@ -228,7 +230,7 @@ class DiploBot:
             context.set_default_timeout(60000)
             
             logger.info(f"🚀 Sniper Active. Target: {Config.TARGET_URL}")
-            send_alert("🚀 Diplo Sniper V15 (Clean Image) Started...")
+            send_alert("🚀 Diplo Sniper V16 (Flexible Captcha) Started...")
             
             while True:
                 month_urls = self.get_month_urls()
