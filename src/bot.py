@@ -3,7 +3,7 @@ import random
 import datetime
 import os
 import logging
-import pytz # مكتبة التوقيت ضرورية
+import pytz 
 from playwright.sync_api import sync_playwright
 from .config import Config
 from .captcha import CaptchaSolver
@@ -14,37 +14,47 @@ logging.basicConfig(
     format='%(asctime)s [%(levelname)s] %(message)s',
     handlers=[logging.StreamHandler()]
 )
-logger = logging.getLogger("MuscatFalcon")
+logger = logging.getLogger("MuscatAmbush")
 
 class DiploBot:
     def __init__(self):
         self.solver = CaptchaSolver()
         self.base_url_template = Config.TARGET_URL + "&request_locale=en"
-        # توقيت اليمن/مسقط (نفس المنطقة الزمنية GMT+3)
+        # توقيت اليمن (GMT+3) هو المعيار
         self.timezone = pytz.timezone("Asia/Aden") 
         self.user_agents = [
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         ]
 
-    def is_golden_hour(self):
+    def wait_for_zero_hour(self):
         """
-        هل نحن في وقت الذروة (الساعة 2 صباحاً)؟
+        بروتوكول الكمين: الانتظار الصامت حتى 01:59:50
         """
-        now = datetime.datetime.now(self.timezone)
-        # الفترة الذهبية: من 1:55 صباحاً إلى 2:10 صباحاً
-        if (now.hour == 1 and now.minute >= 55) or (now.hour == 2 and now.minute <= 10):
-            return True
-        return False
+        logger.info("⏳ AMBUSH MODE: Waiting for Zero Hour (01:59:50)...")
+        
+        while True:
+            now = datetime.datetime.now(self.timezone)
+            
+            # هل وصلنا للوقت المحدد؟ (01:59:50) أو نحن بالفعل في الساعة 2؟
+            if (now.hour == 1 and now.minute == 59 and now.second >= 50) or (now.hour == 2):
+                logger.info("⚡ ZERO HOUR REACHED! LAUNCHING ATTACK! ⚡")
+                return # كسر حلقة الانتظار والانطلاق
+            
+            # طباعة حالة كل 30 ثانية لطمأنة المستخدم أن البوت حي
+            if now.second % 30 == 0:
+                logger.info(f"🕒 Waiting... Current time: {now.strftime('%H:%M:%S')}")
+                time.sleep(1)
+            
+            # فحص سريع جداً (عشر ثانية) للدقة
+            time.sleep(0.1)
 
     def get_month_urls(self):
         urls = []
         today = datetime.datetime.now(self.timezone).date()
         base_clean = self.base_url_template.split("&dateStr=")[0] if "&dateStr=" in self.base_url_template else self.base_url_template
         
-        # في مسقط، التركيز عادة على الأشهر القريبة للإلغاءات والبعيدة للطرح الجديد
-        # سنمسح 5 أشهر
-        for i in range(5): 
+        for i in range(6): 
             future_month = (today.month + i - 1) % 12 + 1
             future_year = today.year + ((today.month + i - 1) // 12)
             date_str = f"15.{future_month:02d}.{future_year}"
@@ -68,50 +78,45 @@ class DiploBot:
         )
         page = context.new_page()
         page.add_init_script("""Object.defineProperty(navigator, 'webdriver', { get: () => undefined });""")
-        context.set_default_timeout(30000) # مهلة سريعة
+        context.set_default_timeout(30000)
         return context, page
 
     def handle_captcha(self, page, location="General"):
-        for attempt in range(5): # 5 محاولات
+        for attempt in range(5):
             try:
                 if not page.locator("input[name='captchaText']").is_visible():
                     return True 
 
-                # في وقت الذروة، لا نضيع وقتاً في السجلات
-                if not self.is_golden_hour():
-                    logger.info(f"⚡ [Captcha-{location}] Attempt {attempt+1}...")
-                
                 captcha_div = page.locator("captcha > div").first
                 
                 if captcha_div.is_visible():
-                    page.wait_for_timeout(300) # انتظار خاطف
+                    # لا انتظار في وقت الهجوم
+                    # page.wait_for_timeout(300) 
                     captcha_bytes = captcha_div.screenshot()
                     code = self.solver.solve(captcha_bytes)
                     code = code.replace(" ", "").strip()
 
-                    # المنطق العقابي: نقبل أي كود بين 4 و 8 أرقام
                     if len(code) < 4 or len(code) > 8: 
                         refresh_btn = page.locator("input[name*='refreshCaptcha']")
                         if refresh_btn.is_visible():
                             refresh_btn.click()
-                            page.wait_for_timeout(800)
+                            page.wait_for_timeout(500)
                         else:
                             page.reload()
                         continue
                     
+                    logger.info(f"🧩 {location} Captcha: {code}")
                     page.fill("input[name='captchaText']", code)
                     page.keyboard.press("Enter")
                     
                     try: page.wait_for_load_state("domcontentloaded", timeout=3000)
                     except: pass
 
-                    # هل ما زلنا في الكابتشا؟
                     if page.locator("input[name='captchaText']").is_visible():
                         continue 
                     
-                    # هل ظهر خطأ Ref-ID؟
-                    content = page.content()
-                    if "error occurred" in content.lower() or "ref-id" in content.lower():
+                    content = page.content().lower()
+                    if "error occurred" in content or "ref-id" in content:
                         return False
 
                     return True
@@ -138,7 +143,6 @@ class DiploBot:
         try:
             if not page.locator("input[name='lastname']").is_visible(): return False
 
-            # الحقن السريع
             self.type_fast(page, "input[name='lastname']", Config.LAST_NAME)
             self.type_fast(page, "input[name='firstname']", Config.FIRST_NAME)
             self.type_fast(page, "input[name='email']", Config.EMAIL)
@@ -161,21 +165,18 @@ class DiploBot:
 
             self.select_visa_category(page)
 
-            # حلقة القتال (5 محاولات)
-            for _ in range(5):
+            for _ in range(10): # زيادة عدد المحاولات في وقت الذروة
                 if not self.handle_captcha(page, location="Form"):
                     if page.locator("input[name='lastname']").is_visible(): continue
                     return False
 
-                # انتظار ذكي للنتيجة
-                try: page.wait_for_load_state("networkidle", timeout=4000)
+                try: page.wait_for_load_state("networkidle", timeout=3000)
                 except: pass
                 
                 content = page.content().lower()
                 if "appointment number" in content or "successfully booked" in content:
                     details = f"✅ VICTORY! {Config.FIRST_NAME} {Config.LAST_NAME}"
                     logger.info(details)
-                    # إرسال الصورة فقط عند النصر
                     ts = datetime.datetime.now().strftime("%H%M%S")
                     page.screenshot(path=f"WIN_{ts}.png")
                     send_photo(f"WIN_{ts}.png", caption=details)
@@ -185,57 +186,47 @@ class DiploBot:
                     logger.warning("⚠️ Silent Reject. Retrying...")
                     continue
                 
-                return False # خطأ آخر
+                return False 
 
             return False
         except: return False
 
     def run(self):
         with sync_playwright() as p:
+            # تشغيل المتصفح مسبقاً (Pre-warm)
             browser = p.chromium.launch(
                 headless=True,
-                args=["--disable-blink-features=AutomationControlled", "--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage", "--disable-gpu", "--no-first-run"]
+                args=["--disable-blink-features=AutomationControlled", "--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage", "--disable-gpu", "--no-first-run", "--disable-extensions"]
             )
             context, page = self.create_context(browser)
-            logger.info(f"🚀 FALCON ACTIVE. Target: {Config.TARGET_URL}")
-            send_alert("🚀 FALCON V25 (Time-Aware) Started...")
+            
+            logger.info("🛡️ SYSTEM READY. Engaging Ambush Protocol...")
+            
+            # 🛑 نقطة التوقف: هنا ينتظر البوت حتى 01:59:50
+            self.wait_for_zero_hour()
+            
+            # 🚀 الانطلاق: الكود أدناه ينفذ فوراً بعد كسر الانتظار
+            send_alert("🚀 ZERO HOUR! ATTACK STARTED!")
             
             while True:
-                # التحقق من الوضع القتالي
-                golden_mode = self.is_golden_hour()
-                if golden_mode:
-                    logger.info("🔥 GOLDEN HOUR! NO SLEEP MODE ACTIVATED! 🔥")
-                
                 month_urls = self.get_month_urls()
                 for url in month_urls:
                     try:
-                        # في الوضع الذهبي، لا نضيع وقتاً في طباعة الروابط
-                        if not golden_mode:
-                            date_part = url.split("dateStr=")[1] if "dateStr=" in url else "Unknown"
-                            logger.info(f"🔎 Scanning: {date_part}")
-                        
-                        try: page.goto(url, wait_until="domcontentloaded", timeout=15000)
+                        # محاولة الدخول بأقصى سرعة (Timeout قصير جداً)
+                        try: page.goto(url, wait_until="domcontentloaded", timeout=10000)
                         except: continue
                         
                         if not self.handle_captcha(page, location="Month"): continue 
 
-                        # --- منطق الكلب البوليسي (Fact-Based Logic) ---
-                        # 1. هل نحن في صفحة التقويم فعلاً؟
+                        # منطق التحقق الصارم (الكلب البوليسي)
                         if page.locator("#calendarform").is_visible():
-                            # نعم، الصفحة تحملت. الآن نبحث عن المواعيد.
                             day_links = page.locator("a.arrow[href*='appointment_showDay']").all()
                             
                             if not day_links:
-                                # التقويم موجود، لكن لا توجد أسهم أيام.
-                                # الحقيقة: الشهر فارغ 100%.
-                                # الإجراء: انتقل فوراً للشهر التالي.
-                                continue 
+                                continue # الشهر فارغ، التالي!
                             
-                            # وجدنا أياماً!
-                            logger.info(f"🔥 {len(day_links)} DAYS FOUND!")
-                            send_alert("🔥 DAY FOUND! Attacking...")
-                            
-                            # العشوائية لتجنب التصادم
+                            logger.info(f"🔥 {len(day_links)} DAYS OPEN!")
+                            # في وقت الذروة، الاختيار العشوائي هو النجاة
                             random.choice(day_links).click()
                             
                             if not self.handle_captcha(page, location="Day"):
@@ -244,7 +235,7 @@ class DiploBot:
                             
                             time_links = page.locator("a.arrow[href*='appointment_showForm']").all()
                             if time_links:
-                                logger.info(f"⏰ {len(time_links)} SLOTS! Attacking...")
+                                logger.info(f"⏰ {len(time_links)} SLOTS!")
                                 random.choice(time_links).click()
                                 
                                 if not self.handle_captcha(page, location="PreForm"):
@@ -252,35 +243,27 @@ class DiploBot:
                                     continue
                                 
                                 if self.fill_booking_form(page, context):
-                                    return # النصر
+                                    return 
                                 else:
-                                    page.goto(url) # فشل الحجز، نعود لنفس الشهر
+                                    page.goto(url) 
                                     continue
-                        
                         else:
-                            # لا يوجد calendarform. هل هي صفحة خطأ؟ أم كابتشا معلقة؟
+                            # التعامل مع حالات الخطأ أو الكابتشا المعلقة
                             content = page.content()
-                            if "captchaText" in content:
-                                # ما زلنا في الكابتشا، نعيد المحاولة
-                                continue
-                            if "Unfortunately" in content:
-                                continue
-                            
-                            # حالة غير معروفة، نعيد التحميل للأمان
+                            if "captchaText" in content: continue
+                            if "Unfortunately" in content: continue
                             page.reload()
 
                     except Exception as e:
-                        # في وقت الذروة، لا تطبع الأخطاء لتوفير الوقت
-                        if not golden_mode: logger.error(f"Err: {e}")
+                        # في وقت الهجوم، تجاهل الأخطاء وأعد المحاولة
                         try: context.close()
                         except: pass
                         context, page = self.create_context(browser)
                 
-                # إدارة النوم بناءً على التوقيت
-                if self.is_golden_hour():
-                    # لا نوم في وقت المعركة!
-                    pass 
+                # لا نوم في وقت الذروة (الساعة 2)
+                now = datetime.datetime.now(self.timezone)
+                if now.hour == 2 and now.minute < 30:
+                    pass # استمر في القصف
                 else:
-                    # نوم الحراسة العادية
-                    logger.info("💤 Patrol sleep (30s)...")
+                    logger.info("💤 Patrol sleep...")
                     time.sleep(30)
