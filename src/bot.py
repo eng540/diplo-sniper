@@ -86,7 +86,7 @@ class DiploBot:
                     code = code.replace(" ", "").strip()
 
                     # التحقق من الطول (6 أحرف عادة)
-                    if len(code) < 4 or len(code) > 8: 
+                    if len(code) < 5 or len(code) > 8: 
                         logger.warning(f"⚠️ Bad length ({len(code)}). Refreshing image...")
                         refresh_btn = page.locator("input[name*='refreshCaptcha']")
                         if refresh_btn.is_visible():
