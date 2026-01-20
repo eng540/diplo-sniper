@@ -14,13 +14,13 @@ logging.basicConfig(
     format='%(asctime)s [%(levelname)s] %(message)s',
     handlers=[logging.StreamHandler()]
 )
-logger = logging.getLogger("MuscatAmbushTest")
+logger = logging.getLogger("MuscatAmbush")
 
 class DiploBot:
     def __init__(self):
         self.solver = CaptchaSolver()
         self.base_url_template = Config.TARGET_URL + "&request_locale=en"
-        # توقيت اليمن (GMT+3)
+        # توقيت اليمن (GMT+3) هو المعيار
         self.timezone = pytz.timezone("Asia/Aden") 
         self.user_agents = [
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
@@ -29,23 +29,24 @@ class DiploBot:
 
     def wait_for_zero_hour(self):
         """
-        بروتوكول الكمين (وضع الاختبار): الانتظار الصامت حتى 01:50:00
+        بروتوكول الكمين: الانتظار الصامت حتى 01:59:50
         """
-        logger.info("⏳ TEST AMBUSH MODE: Waiting for 01:50:00...")
+        logger.info("⏳ AMBUSH MODE: Waiting for Zero Hour (01:59:50)...")
         
         while True:
             now = datetime.datetime.now(self.timezone)
             
-            # التعديل: الانطلاق عند الساعة 1:50 (أو بعدها لضمان التشغيل)
-            if (now.hour == 1 and now.minute >= 50) or (now.hour >= 2):
-                logger.info("⚡ TEST ZERO HOUR REACHED (01:50)! LAUNCHING ATTACK! ⚡")
+            # هل وصلنا للوقت المحدد؟ (01:59:50) أو نحن بالفعل في الساعة 2؟
+            if (now.hour == 1 and now.minute == 59 and now.second >= 50) or (now.hour == 2):
+                logger.info("⚡ ZERO HOUR REACHED! LAUNCHING ATTACK! ⚡")
                 return # كسر حلقة الانتظار والانطلاق
             
-            # طباعة حالة كل 10 ثواني في وضع الاختبار
-            if now.second % 10 == 0:
+            # طباعة حالة كل 30 ثانية لطمأنة المستخدم أن البوت حي
+            if now.second % 30 == 0:
                 logger.info(f"🕒 Waiting... Current time: {now.strftime('%H:%M:%S')}")
                 time.sleep(1)
             
+            # فحص سريع جداً (عشر ثانية) للدقة
             time.sleep(0.1)
 
     def get_month_urls(self):
@@ -89,6 +90,8 @@ class DiploBot:
                 captcha_div = page.locator("captcha > div").first
                 
                 if captcha_div.is_visible():
+                    # لا انتظار في وقت الهجوم
+                    # page.wait_for_timeout(300) 
                     captcha_bytes = captcha_div.screenshot()
                     code = self.solver.solve(captcha_bytes)
                     code = code.replace(" ", "").strip()
@@ -162,7 +165,7 @@ class DiploBot:
 
             self.select_visa_category(page)
 
-            for _ in range(10): 
+            for _ in range(10): # زيادة عدد المحاولات في وقت الذروة
                 if not self.handle_captcha(page, location="Form"):
                     if page.locator("input[name='lastname']").is_visible(): continue
                     return False
@@ -190,35 +193,40 @@ class DiploBot:
 
     def run(self):
         with sync_playwright() as p:
+            # تشغيل المتصفح مسبقاً (Pre-warm)
             browser = p.chromium.launch(
                 headless=True,
                 args=["--disable-blink-features=AutomationControlled", "--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage", "--disable-gpu", "--no-first-run", "--disable-extensions"]
             )
             context, page = self.create_context(browser)
             
-            logger.info("🛡️ TEST READY. Waiting for 01:50...")
+            logger.info("🛡️ SYSTEM READY. Engaging Ambush Protocol...")
             
-            # 🛑 الانتظار حتى 1:50
+            # 🛑 نقطة التوقف: هنا ينتظر البوت حتى 01:59:50
             self.wait_for_zero_hour()
             
-            send_alert("🚀 TEST ATTACK STARTED!")
+            # 🚀 الانطلاق: الكود أدناه ينفذ فوراً بعد كسر الانتظار
+            send_alert("🚀 ZERO HOUR! ATTACK STARTED!")
             
             while True:
                 month_urls = self.get_month_urls()
                 for url in month_urls:
                     try:
+                        # محاولة الدخول بأقصى سرعة (Timeout قصير جداً)
                         try: page.goto(url, wait_until="domcontentloaded", timeout=10000)
                         except: continue
                         
                         if not self.handle_captcha(page, location="Month"): continue 
 
+                        # منطق التحقق الصارم (الكلب البوليسي)
                         if page.locator("#calendarform").is_visible():
                             day_links = page.locator("a.arrow[href*='appointment_showDay']").all()
                             
                             if not day_links:
-                                continue 
+                                continue # الشهر فارغ، التالي!
                             
                             logger.info(f"🔥 {len(day_links)} DAYS OPEN!")
+                            # في وقت الذروة، الاختيار العشوائي هو النجاة
                             random.choice(day_links).click()
                             
                             if not self.handle_captcha(page, location="Day"):
@@ -240,15 +248,22 @@ class DiploBot:
                                     page.goto(url) 
                                     continue
                         else:
+                            # التعامل مع حالات الخطأ أو الكابتشا المعلقة
                             content = page.content()
                             if "captchaText" in content: continue
                             if "Unfortunately" in content: continue
                             page.reload()
 
                     except Exception as e:
+                        # في وقت الهجوم، تجاهل الأخطاء وأعد المحاولة
                         try: context.close()
                         except: pass
                         context, page = self.create_context(browser)
                 
-                # لا نوم في وضع الاختبار
-                logger.info("⚡ Attack cycle done. Repeating immediately...")
+                # لا نوم في وقت الذروة (الساعة 2)
+                now = datetime.datetime.now(self.timezone)
+                if now.hour == 2 and now.minute < 30:
+                    pass # استمر في القصف
+                else:
+                    logger.info("💤 Patrol sleep...")
+                    time.sleep(30)
