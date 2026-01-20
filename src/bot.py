@@ -8,7 +8,7 @@ import logging
 from playwright.sync_api import sync_playwright
 from .config import Config
 from .captcha import CaptchaSolver
-from .notifier import send_alert, send_photo
+from .notifier import send_alert, send_photo, send_file
 
 logging.basicConfig(
     level=logging.INFO,
@@ -30,6 +30,21 @@ class DiploBot:
 
     def get_timestamp(self):
         return datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+
+    # ✅ THE PROBE: حفظ وإرسال مباشر
+    def save_snapshot(self, page, tag):
+        try:
+            ts = self.get_timestamp()
+            filename = f"debug_{tag}_{ts}.html"
+            with open(filename, "w", encoding="utf-8") as f:
+                f.write(page.content())
+            logger.info(f"📸 FACT PROBE: Saved -> {filename}")
+            
+            # 📤 إرسال الملف مباشرة للبوت
+            send_file(filename, caption=f"🕵️‍♂️ FACT PROBE: {tag}")
+            
+        except Exception as e:
+            logger.error(f"⚠️ Failed to save/send snapshot: {e}")
 
     def get_month_urls(self):
         urls = []
@@ -64,22 +79,6 @@ class DiploBot:
         context.set_default_timeout(60000)
         return context, page
 
-    def refresh_captcha(self, page):
-        try:
-            logger.info("   -> 🔄 Refreshing Captcha...")
-            refresh_btn = page.locator("input[name^='action:appointment_refreshCaptcha']").first
-            if refresh_btn.is_visible():
-                refresh_btn.click()
-                page.wait_for_timeout(3000)
-                return True
-            else:
-                page.reload()
-                page.wait_for_load_state("domcontentloaded")
-                return True
-        except:
-            pass
-        return False
-
     def handle_captcha(self, page, context, max_retries=5):
         for attempt in range(max_retries):
             try:
@@ -95,10 +94,13 @@ class DiploBot:
                     code = self.solver.solve(captcha_bytes)
                     
                     if len(code) != 6:
-                        logger.warning(f"⚠️ Invalid length ({len(code)}). Hard Resetting...")
-                        context.clear_cookies()
-                        page.reload()
-                        page.wait_for_load_state("domcontentloaded")
+                        logger.warning(f"⚠️ Invalid length ({len(code)}). Retrying...")
+                        refresh_btn = page.locator("input[name*='refreshCaptcha']")
+                        if refresh_btn.is_visible():
+                            refresh_btn.click()
+                            page.wait_for_timeout(2000)
+                        else:
+                            page.reload()
                         continue
                     
                     logger.info(f"🧩 Decoded: {code}")
@@ -113,9 +115,7 @@ class DiploBot:
                         pass
 
                     if page.locator("input[name='captchaText']").is_visible():
-                        logger.warning("❌ Captcha failed. Resetting Session...")
-                        context.clear_cookies()
-                        page.reload()
+                        logger.warning("❌ Captcha failed. Retrying...")
                         continue 
                     
                     content = page.content().lower()
@@ -167,6 +167,8 @@ class DiploBot:
 
     def extract_and_verify_success(self, page):
         content = page.content()
+        self.save_snapshot(page, "verification_step")
+        
         if "error occurred" in content.lower() or "ref-id" in content.lower():
             return False, None
 
@@ -182,11 +184,12 @@ class DiploBot:
 
     def fill_booking_form(self, page, context):
         logger.info("📝 Filling Booking Form...")
+        self.save_snapshot(page, "form_page")
+        
         try:
             if not page.locator("input[name='lastname']").is_visible():
                 return False
 
-            # تعبئة الحقول (مرة واحدة فقط)
             self.type_like_human(page, "input[name='lastname']", Config.LAST_NAME)
             self.type_like_human(page, "input[name='firstname']", Config.FIRST_NAME)
             self.type_like_human(page, "input[name='email']", Config.EMAIL)
@@ -213,23 +216,21 @@ class DiploBot:
 
             self.select_visa_category(page)
 
-            # حلقة الإصرار على الإرسال
             for attempt in range(5):
                 logger.info(f"🚀 Submission Attempt {attempt+1}/5...")
                 
                 success, page = self.handle_captcha(page, context)
                 if not success:
-                    # التحقق من بقاء النموذج
                     if page.locator("input[name='lastname']").is_visible():
-                        logger.warning("   -> Captcha failed but form is safe. Retrying...")
                         continue
                     else:
-                        logger.error("❌ Lost form page.")
                         return False
 
-                logger.info("🚨 Form Submitted via Captcha Enter. Verifying...")
+                logger.info("🚨 Form Submitted. Verifying...")
                 page.wait_for_timeout(5000)
                 
+                self.save_snapshot(page, f"submission_result_{attempt}")
+
                 success_verify, details = self.extract_and_verify_success(page)
                 ts = self.get_timestamp()
                 
@@ -242,8 +243,6 @@ class DiploBot:
                 content = page.content().lower()
                 if "error occurred" in content or "ref-id" in content:
                     logger.error("❌ Booking Failed (Error Page).")
-                    page.screenshot(path=f"error_{ts}.png")
-                    send_photo(f"error_{ts}.png", caption="❌ Booking Failed (See Image)")
                     return False
                 
                 if page.locator("input[name='lastname']").is_visible():
@@ -254,6 +253,7 @@ class DiploBot:
 
         except Exception as e:
             logger.error(f"❌ Form Error: {e}")
+            self.save_snapshot(page, "form_error_exception")
             return False
 
     def run(self):
@@ -265,8 +265,8 @@ class DiploBot:
             
             context, page = self.create_context(browser)
             
-            logger.info(f"🚀 Sniper Active. Target: {Config.TARGET_URL}")
-            send_alert("🚀 Diplo Sniper V21 (Persistent) Started...")
+            logger.info(f"🚀 Sniper Active with FACT PROBE. Target: {Config.TARGET_URL}")
+            send_alert(f"🚀 Diplo Sniper V22 (Fact Probe + AutoSend) Started...")
             
             while True:
                 month_urls = self.get_month_urls()
@@ -285,19 +285,24 @@ class DiploBot:
                             time.sleep(random.uniform(2, 4)) 
                             continue
                         
+                        found_slots = False
                         while True:
                             day_link = page.locator("a.arrow[href*='appointment_showDay']").first
                             if not day_link.is_visible():
-                                logger.info("⚠️ Slot disappeared or taken.")
+                                logger.info("⚠️ Slot disappeared or taken (Capturing Evidence)...")
+                                # ✅ PROBE: إرسال الملف فوراً عند الخطأ
+                                self.save_snapshot(page, "CRITICAL_slot_disappeared_error")
                                 break 
 
                             logger.info("🔥 DAY FOUND! Attacking...")
+                            found_slots = True
+                            self.save_snapshot(page, "day_found_pre_click")
+                            
                             send_alert(f"🔥 DAY FOUND! {date_part} - Attacking...")
                             
                             day_link.click()
                             success, page = self.handle_captcha(page, context)
                             if not success:
-                                logger.warning("   -> Captcha failed on Day. Retrying...")
                                 page.go_back()
                                 page.reload()
                                 continue
@@ -305,10 +310,11 @@ class DiploBot:
                             time_link = page.locator("a.arrow[href*='appointment_showForm']").first
                             if time_link.is_visible():
                                 logger.info("⏰ TIME FOUND!")
+                                self.save_snapshot(page, "time_found")
+                                
                                 time_link.click()
                                 success, page = self.handle_captcha(page, context)
                                 if not success:
-                                    logger.warning("   -> Captcha failed on Time. Retrying...")
                                     page.go_back()
                                     continue
                                 
@@ -321,6 +327,7 @@ class DiploBot:
                                     continue
                             else:
                                 logger.warning("⚠️ Day open but time slots gone.")
+                                self.save_snapshot(page, "day_open_no_time")
                                 break
                     except Exception as e:
                         logger.error(f"⚠️ Loop Error: {e}")
