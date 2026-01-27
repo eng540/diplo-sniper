@@ -1,4 +1,4 @@
-from src.bot import SentinelBot
+from src.bot import DiploBot
 
 if __name__ == "__main__":
-    SentinelBot().run()
+    DiploBot().run()
