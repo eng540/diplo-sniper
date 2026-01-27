@@ -148,7 +148,14 @@ class DiploBot:
 
                     today = datetime.date.today()
 
-                    for i in range(2):
+                    # ======== SCAN UNTIL MAY ========
+                    target_year = today.year
+                    if today.month > 5:
+                        target_year += 1
+
+                    months_to_may = (target_year - today.year) * 12 + (5 - today.month) + 1
+
+                    for i in range(months_to_may):
                         target = today + datetime.timedelta(days=30 * i)
                         date_str = target.strftime("15.%m.%Y")
                         base = self.base_url.split("&dateStr=")[0]
@@ -166,7 +173,7 @@ class DiploBot:
 
                         content = page.content().lower()
 
-                        if "appointment_showDay" not in content:
+                        if "appointment_showday" not in content:
                             continue
 
                         logger.info("🔥 DAY FOUND")
