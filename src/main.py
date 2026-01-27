@@ -1,4 +1,5 @@
-from src.bot import DiploBot
+from src.bot import KingSniper
 
 if __name__ == "__main__":
-    DiploBot().run()
+    # تشغيل النسخة الملكية
+    KingSniper().run()
