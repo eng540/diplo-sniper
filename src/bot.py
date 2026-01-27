@@ -32,7 +32,7 @@ class DiploBot:
         urls = []
         today = datetime.date.today()
         base_clean = self.base_url_template.split("&dateStr=")[0] if "&dateStr=" in self.base_url_template else self.base_url_template
-        
+
         # مسح 6 أشهر للأمام
         for i in range(6): 
             future_month = (today.month + i - 1) % 12 + 1
@@ -48,7 +48,7 @@ class DiploBot:
             page.focus(selector)
             page.fill(selector, text)
         except: pass
-            
+
     def create_context(self, browser):
         ua = random.choice(self.user_agents)
         context = browser.new_context(
@@ -75,13 +75,13 @@ class DiploBot:
 
                 logger.info(f"⚡ [Captcha-{location}] Attempt {attempt+1}...")
                 captcha_div = page.locator("captcha > div").first
-                
+
                 if captcha_div.is_visible():
                     # انتظار قصير جداً لتحميل الصورة
                     page.wait_for_timeout(500) 
                     captcha_bytes = captcha_div.screenshot()
                     code = self.solver.solve(captcha_bytes)
-                    
+
                     # تنظيف الكود
                     code = code.replace(" ", "").strip()
 
@@ -95,11 +95,11 @@ class DiploBot:
                         else:
                             page.reload()
                         continue
-                    
+
                     logger.info(f"🧩 Decoded: {code}")
                     page.fill("input[name='captchaText']", code)
                     page.keyboard.press("Enter")
-                    
+
                     # التحقق الذكي من النتيجة
                     try:
                         # ننتظر قليلاً لنرى هل انتقلنا أم بقينا
@@ -114,7 +114,7 @@ class DiploBot:
                         else:
                             logger.warning("⚠️ Still on captcha page. Retrying...")
                         continue 
-                    
+
                     # 2. هل ظهرت صفحة خطأ عام؟
                     content = page.content().lower()
                     if "error occurred" in content or "ref-id" in content:
@@ -127,7 +127,7 @@ class DiploBot:
             except Exception as e:
                 logger.error(f"⚠️ Captcha Error: {e}")
                 page.reload()
-        
+
         return False
 
     def select_visa_category(self, page):
@@ -138,7 +138,7 @@ class DiploBot:
             # الكلمات المفتاحية للحجز (الأولوية للطلاب واللغة)
             priority_keywords = ["yemeni national", "student visa", "language course", "studium", "sprachkurs", "university"]
             options = select_locator.locator("option").all()
-            
+
             for option in options:
                 text = option.text_content()
                 if text and any(k.lower() in text.lower() for k in priority_keywords):
@@ -160,7 +160,7 @@ class DiploBot:
             self.type_fast(page, "input[name='lastname']", Config.LAST_NAME)
             self.type_fast(page, "input[name='firstname']", Config.FIRST_NAME)
             self.type_fast(page, "input[name='email']", Config.EMAIL)
-            
+
             # التعامل مع تكرار الإيميل
             if page.locator("input[name='emailrepeat']").is_visible():
                 self.type_fast(page, "input[name='emailrepeat']", Config.EMAIL)
@@ -185,7 +185,7 @@ class DiploBot:
             # حلقة الإرسال (The Retry Loop)
             for attempt in range(5):
                 logger.info(f"🚀 Submission Attempt {attempt+1}/5...")
-                
+
                 # حل كابتشا النموذج
                 if not self.handle_captcha(page, context, location="Form"):
                     # إذا فشل الكابتشا، نتأكد هل النموذج ما زال موجوداً
@@ -194,13 +194,13 @@ class DiploBot:
                     return False # خسرنا الصفحة
 
                 logger.info("🚨 Form Submitted. Checking result...")
-                
+
                 # ننتظر قليلاً النتيجة
                 try: page.wait_for_load_state("networkidle", timeout=5000)
                 except: pass
-                
+
                 content = page.content()
-                
+
                 # 1. التحقق من النجاح
                 if "appointment number" in content.lower() or "successfully booked" in content.lower():
                     details = "✅ ROCKET SUCCESS! BOOKING CONFIRMED!\n"
@@ -209,14 +209,14 @@ class DiploBot:
                     match_date = re.search(r"(\d{2}\.\d{2}\.\d{4})", content)
                     if match_date: details += f"📅 Date: {match_date.group(1)}\n"
                     details += f"👤 Name: {Config.FIRST_NAME} {Config.LAST_NAME}"
-                    
+
                     logger.info(details)
                     # نلتقط صورة للتوثيق فقط عند النجاح
                     ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
                     page.screenshot(path=f"VICTORY_{ts}.png")
                     send_photo(f"VICTORY_{ts}.png", caption=details)
                     return True
-                
+
                 # 2. هل عدنا لنفس الصفحة؟ (Silent Refresh / Burnt Data)
                 if page.locator("input[name='lastname']").is_visible():
                     logger.warning("⚠️ Returned to form (Silent Reject). Retrying immediately...")
@@ -249,30 +249,30 @@ class DiploBot:
                     "--disable-web-security"
                 ]
             )
-            
+
             context, page = self.create_context(browser)
             logger.info(f"🚀 ROCKET SNIPER ENGAGED. Target: {Config.TARGET_URL}")
             send_alert("🚀 ROCKET SNIPER V23 (Optimized) Started...")
-            
+
             while True:
                 month_urls = self.get_month_urls()
                 for url in month_urls:
                     try:
                         date_part = url.split("dateStr=")[1] if "dateStr=" in url else "Unknown"
                         logger.info(f"🔎 Scanning: {date_part}")
-                        
+
                         try: 
                             page.goto(url, wait_until="domcontentloaded", timeout=20000)
                         except: 
                             continue
-                        
+
                         # حل كابتشا الشهر
                         if not self.handle_captcha(page, context, location="Month"): 
                             continue 
 
                         # الفحص الحاسم: هل نحن في صفحة الشهر فعلاً؟
                         content = page.content()
-                        
+
                         # 1. هل ما زلنا في الكابتشا؟ (الحلقة المفرغة)
                         if "appointment_captcha_month" in content or "captchaText" in content:
                             logger.warning("🔄 Stuck on Month Captcha loop. Retrying same month...")
@@ -284,7 +284,7 @@ class DiploBot:
                         if "Unfortunately, there are no appointments" in content or "keine Termine" in content:
                             # لا داعي للبحث عن روابط، ننتقل فوراً
                             continue
-                        
+
                         # 3. البحث عن الأيام
                         day_links = page.locator("a.arrow[href*='appointment_showDay']").all()
                         if not day_links:
@@ -296,26 +296,26 @@ class DiploBot:
                         # 4. وجدنا أياماً! الهجوم!
                         logger.info(f"🔥 {len(day_links)} DAYS FOUND! Attacking first one...")
                         send_alert(f"🔥 DAY FOUND! {date_part} - Attacking...")
-                        
+
                         # نضغط الأول فوراً
                         day_links[0].click()
-                        
+
                         # كابتشا اليوم
                         if not self.handle_captcha(page, context, location="Day"):
                             page.go_back()
                             continue
-                        
+
                         # البحث عن الوقت
                         time_link = page.locator("a.arrow[href*='appointment_showForm']").first
                         if time_link.is_visible():
                             logger.info("⏰ TIME FOUND! Clicking...")
                             time_link.click()
-                            
+
                             # كابتشا ما قبل الاستمارة
                             if not self.handle_captcha(page, context, location="Pre-Form"):
                                 page.go_back()
                                 continue
-                            
+
                             # تعبئة الاستمارة
                             if self.fill_booking_form(page, context):
                                 logger.info("✅ MISSION COMPLETE. Exiting.")
@@ -326,7 +326,7 @@ class DiploBot:
                                 continue
                         else:
                             logger.warning("⚠️ Day open but slots taken.")
-                            
+
                     except Exception as e:
                         logger.error(f"⚠️ Loop Error: {e}")
                         # إعادة إنشاء المتصفح عند الأخطاء الكبيرة لتنظيف الذاكرة
@@ -334,6 +334,6 @@ class DiploBot:
                         except: pass
                         context, page = self.create_context(browser)
                         time.sleep(2)
-                
+
                 logger.info("💤 Cycle done. Sleeping 45s...")
                 time.sleep(45)
