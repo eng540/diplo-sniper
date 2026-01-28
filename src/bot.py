@@ -20,10 +20,10 @@ from playwright.sync_api import sync_playwright, Page, BrowserContext, Browser
 try:
     from src.config import Config
     from src.captcha import CaptchaSolver
-    from sec.notifier import send_alert, send_photo
+    from src.notifier import send_alert, send_photo
 except ImportError:
     try:
-        from sec.config import Config
+        from src.config import Config
         from src.captcha import CaptchaSolver
         from src.notifier import send_alert, send_photo
     except ImportError as e:
