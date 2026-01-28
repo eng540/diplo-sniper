@@ -6,12 +6,13 @@ import pytz
 import ntplib
 from playwright.sync_api import sync_playwright
 
+# الحفاظ على الـ Imports الخاصة بنظامك كما هي
 from .config import Config
 from .captcha import CaptchaSolver
 from .notifier import send_alert, send_photo
 
 # ---------------------------------------------------------
-# 1. Logging Speed & Precision
+# 1. إعدادات السجل (كما هي)
 # ---------------------------------------------------------
 logging.basicConfig(
     level=logging.INFO,
@@ -23,6 +24,7 @@ logger = logging.getLogger("EliteSniper")
 
 class EliteSniper:
     def __init__(self):
+        # استخدام الكلاسات الموجودة في نظامك
         self.solver = CaptchaSolver()
         self.base_url = Config.TARGET_URL + "&request_locale=en"
         self.tz_yemen = pytz.timezone('Asia/Aden')
@@ -33,11 +35,11 @@ class EliteSniper:
         ]
         self.poisoned_session = False
         
-        # NTP Sync on init
+        # مزامنة الوقت عند التشغيل
         self.sync_time()
 
     # ---------------------------------------------------------
-    # 2. Time Warfare (NTP & Zero Hour)
+    # 2. إدارة الوقت (تحسينات طفيفة للأداء)
     # ---------------------------------------------------------
     def sync_time(self):
         try:
@@ -58,27 +60,26 @@ class EliteSniper:
         
         while True:
             now = self.get_precise_time()
-            if now.hour == target_hour and now.minute == target_minute and now.second >= target_second:
+            if (now.hour == 2) or (now.hour == target_hour and now.minute == target_minute and now.second >= target_second):
                 logger.info("⚔️ ZERO HOUR REACHED! LAUNCHING ATTACK!")
                 break
             
-            # Blocking wait for precision (no sleep inside critical window)
+            # انتظار نشط للدقة العالية في آخر الثواني
             if now.hour == target_hour and now.minute == target_minute and now.second > 45:
-                pass # Busy wait
+                pass 
             else:
                 time.sleep(0.5)
 
     def get_mode(self):
         now = self.get_precise_time()
-        # Beast Mode: 01:59:50 to 02:05:00
-        if (now.hour == 1 and now.minute == 59 and now.second >= 50) or (now.hour == 2 and now.minute <= 5):
+        if (now.hour == 1 and now.minute == 59 and now.second >= 50) or (now.hour == 2 and now.minute <= 10):
             return "BEAST"
         if now.hour == 1 and now.minute >= 45:
             return "WARMUP"
         return "PATROL"
 
     # ---------------------------------------------------------
-    # 3. Infrastructure (Rebirth & Resource Blocking)
+    # 3. البنية التحتية (إصلاح مشكلة الـ CSS)
     # ---------------------------------------------------------
     def rebirth(self, context, browser):
         logger.critical("☣️ REBIRTH PROTOCOL ACTIVATED.")
@@ -86,12 +87,12 @@ class EliteSniper:
         except: pass
         
         mode = self.get_mode()
-        sleep_time = 0.5 if mode == "BEAST" else random.uniform(5, 8)
+        sleep_time = 0.5 if mode == "BEAST" else random.uniform(3, 5)
         time.sleep(sleep_time)
         
         new_context = browser.new_context(
             user_agent=random.choice(self.user_agents),
-            viewport={"width": 1366, "height": 768},
+            viewport={"width": 1366 + random.randint(0, 50), "height": 768 + random.randint(0, 50)},
             locale="en-US",
             timezone_id="Asia/Aden"
         )
@@ -99,9 +100,9 @@ class EliteSniper:
         page = new_context.new_page()
         page.add_init_script("Object.defineProperty(navigator, 'webdriver', { get: () => undefined });")
         
-        # AGGRESSIVE RESOURCE BLOCKING
+        # [تحسين] السماح للـ CSS والخطوط لتجنب كشف البوت (إصلاح الانهيار المحتمل)
         page.route("**/*", lambda route: route.abort() 
-                   if route.request.resource_type in ["image", "media", "font", "stylesheet"] 
+                   if route.request.resource_type in ["image", "media"] 
                    else route.continue_())
 
         self.poisoned_session = False
@@ -109,84 +110,120 @@ class EliteSniper:
         return new_context, page
 
     # ---------------------------------------------------------
-    # 4. Injection & Ghost Click
+    # 4. أدوات الحقن والديناميكية (تطوير الوظائف)
     # ---------------------------------------------------------
     def fast_inject(self, page, selector, value):
+        # دالة الحقن الأساسية (لم تتغير)
         if page.locator(selector).count() == 0: return False
         try:
             page.evaluate(f"""
                 const el = document.querySelector("{selector}");
-                if(el) {{ el.value = "{value}"; el.dispatchEvent(new Event('change', {{bubbles:true}})); }}
+                if(el) {{ 
+                    el.value = "{value}"; 
+                    el.dispatchEvent(new Event('input', {{bubbles:true}}));
+                    el.dispatchEvent(new Event('change', {{bubbles:true}})); 
+                }}
             """)
             return True
         except: return False
 
-    def robust_fill_form(self, page):
-        # 1. Standard Fields
-        self.fast_inject(page, "input[name='lastname']", Config.LAST_NAME)
-        self.fast_inject(page, "input[name='firstname']", Config.FIRST_NAME)
-        self.fast_inject(page, "input[name='email']", Config.EMAIL)
-        if not self.fast_inject(page, "input[name='emailrepeat']", Config.EMAIL):
-             self.fast_inject(page, "input[name='emailRepeat']", Config.EMAIL)
-
-        # 2. Dynamic Fields (Passport/Phone) via ID Finding or Fallback
-        passport = Config.PASSPORT
-        phone = Config.PHONE.replace("+", "00").strip()
-        
-        # Try finding by Definition ID (Most robust if known) logic or fallbacks
-        if not self.fast_inject(page, "input[name='fields[0].content']", passport):
-             # Try label search
-             pass 
-        self.fast_inject(page, "input[name='fields[1].content']", phone)
-
-        # 3. Select Category
+    def map_and_inject(self, page, label_keyword, value):
+        """
+        [جديد] محرك البحث الديناميكي: يربط الاسم الظاهر (Label) بالحقل المخفي (Input)
+        هذا يضمن العمل حتى لو غيرت السفارة أسماء الحقول.
+        """
         try:
-            page.evaluate("document.querySelector('select').selectedIndex = 1; document.querySelector('select').dispatchEvent(new Event('change'));")
+            target_name = page.evaluate(f"""() => {{
+                const labels = Array.from(document.querySelectorAll('label'));
+                const targetLabel = labels.find(l => l.innerText.toLowerCase().includes("{label_keyword.lower()}"));
+                if (targetLabel) {{
+                    const inputId = targetLabel.getAttribute('for');
+                    if (inputId) {{
+                        const inputElement = document.getElementById(inputId);
+                        if (inputElement) return inputElement.getAttribute('name');
+                    }}
+                }}
+                return null;
+            }}""")
+
+            if target_name:
+                logger.info(f"🔗 Mapped '{label_keyword}' -> '{target_name}'")
+                return self.fast_inject(page, f"input[name='{target_name}']", value)
+            
+            # Fallback: المحاولة بالطريقة القديمة إذا فشل الديناميكي
+            return False
+        except: return False
+
+    def select_visa_category(self, page):
+        """
+        [جديد] اختيار فئة الفيزا بذكاء حسب الأولوية (اليمنيين أولاً)
+        """
+        try:
+            priority_keywords = [
+                "yemeni national", "student", "studium", 
+                "language", "sprachkurs", "university"
+            ]
+            
+            result = page.evaluate(f"""(keywords) => {{
+                const selects = Array.from(document.querySelectorAll('select'));
+                const targetSelect = selects.find(s => s.options.length > 2) || selects[0];
+                if (!targetSelect) return null;
+
+                for (const keyword of keywords) {{
+                    for (let i = 0; i < targetSelect.options.length; i++) {{
+                        if (targetSelect.options[i].text.toLowerCase().includes(keyword)) {{
+                            targetSelect.selectedIndex = i;
+                            targetSelect.dispatchEvent(new Event('change', {{bubbles:true}}));
+                            return targetSelect.options[i].text;
+                        }}
+                    }}
+                }}
+                // الافتراضي
+                if (targetSelect.options.length > 1) {{
+                     targetSelect.selectedIndex = 1;
+                     targetSelect.dispatchEvent(new Event('change', {{bubbles:true}}));
+                }}
+                return "Default";
+            }}""", priority_keywords)
+            
+            if result: logger.info(f"📋 Category Selected: {result}")
         except: pass
 
-    # ---------------------------------------------------------
-    # 5. Deathmatch Loop (Form Submission)
-    # ---------------------------------------------------------
-    def deathmatch_submit(self, page, mode):
-        logger.info("💀 ENTERING DEATHMATCH SUBMISSION LOOP (10 Attempts)...")
-        
-        for i in range(10):
-            # 1. Solve Captcha
-            if not self.solve_captcha(page, mode):
-                # If captcha failed but form still there, retry loop
-                if page.locator("input[name='lastname']").count() > 0: continue
-                return False # Lost the page
+    def robust_fill_form(self, page):
+        """
+        تعبئة النموذج باستخدام المحرك الديناميكي المطور
+        """
+        # الحقول الأساسية
+        if not self.map_and_inject(page, "Last name", Config.LAST_NAME):
+            self.fast_inject(page, "input[name='lastname']", Config.LAST_NAME)
             
-            # 2. Check Result
-            try: page.wait_for_load_state("networkidle", timeout=5000)
-            except: pass
+        if not self.map_and_inject(page, "First name", Config.FIRST_NAME):
+            self.fast_inject(page, "input[name='firstname']", Config.FIRST_NAME)
             
-            content = page.content().lower()
-            if "appointment number" in content:
-                logger.info("🏆 VICTORY! APPOINTMENT SECURED.")
-                send_photo(page.screenshot(), "✅ VICTORY!")
-                return True
+        if not self.map_and_inject(page, "Email", Config.EMAIL):
+            self.fast_inject(page, "input[name='email']", Config.EMAIL)
             
-            # Silent Reject?
-            if page.locator("input[name='lastname']").count() > 0:
-                logger.warning(f"⚔️ Silent Reject (Attempt {i+1}). RELOADING WEAPON...")
-                continue # Immediate loop
+        if not self.map_and_inject(page, "Repeat", Config.EMAIL):
+            self.fast_inject(page, "input[name='emailrepeat']", Config.EMAIL)
+
+        # الحقول الديناميكية (الجواز والهاتف) - هنا تكمن القوة
+        if not self.map_and_inject(page, "Passport", Config.PASSPORT):
+            # محاولة يدوية إذا فشل الديناميكي
+            self.fast_inject(page, "input[name='fields[0].content']", Config.PASSPORT)
             
-            # Error Page?
-            if "error" in content:
-                logger.error("❌ Server Error.")
-                return False
-                
-        return False
+        if not self.map_and_inject(page, "Telephone", Config.PHONE):
+            self.fast_inject(page, "input[name='fields[1].content']", Config.PHONE)
+
+        # اختيار الفئة
+        self.select_visa_category(page)
 
     # ---------------------------------------------------------
-    # 6. Checks & Solvers
+    # 5. التقديم وحل الكابتشا
     # ---------------------------------------------------------
     def check_poison(self, page, location="Unknown"):
-        # Context-Aware: Month Captcha is ONLY poison if we are NOT in Month View
-        # But for safety, we rely mainly on "Black Captcha" detection or "Bounced back" logic
+        # التحقق من الحظر
         if location == "Form" and page.locator("form#appointment_captcha_month").count() > 0:
-            logger.warning("☠️ POISON: Bounced to Month Captcha from Form.")
+            logger.warning("☠️ POISON: Bounced back.")
             self.poisoned_session = True
             return True
         return False
@@ -196,27 +233,71 @@ class EliteSniper:
         
         captcha_div = page.locator("captcha > div").first
         if captcha_div.is_visible():
+            # انتظار بسيط لضمان اكتمال تحميل الصورة
+            page.wait_for_timeout(200)
             img_bytes = captcha_div.screenshot()
-            # Black Captcha Check
-            if len(img_bytes) < 1500:
+            
+            # فحص الصورة التالفة
+            if len(img_bytes) < 1000:
                 logger.critical("⚫ BLACK CAPTCHA. POISONED.")
                 self.poisoned_session = True
                 return False
-                
-            code = self.solver.solve(img_bytes).replace(" ","")
+            
+            # استخدام ملف الكابتشا الموجود لديك (بدون تغيير بنيته)
+            code = self.solver.solve(img_bytes)
+            
+            # تنظيف الكود الناتج لضمان الجودة
+            code = code.replace(" ", "").strip().lower()
+            
             if len(code) > 3:
                 self.fast_inject(page, "input[name='captchaText']", code)
-                page.keyboard.press("Enter")
+                
+                # [تحسين] محاولة ضغط الزر برمجياً بدلاً من الاعتماد فقط على Enter
+                try:
+                    page.evaluate("const btn = document.querySelector('input[type=\"submit\"]'); if(btn) btn.click();")
+                except:
+                    page.keyboard.press("Enter")
+                
                 try: page.wait_for_load_state("domcontentloaded", timeout=3000)
                 except: pass
                 
-                # Check if still there
                 if page.locator("input[name='captchaText']").is_visible(): return False
                 return True
         return False
 
+    def deathmatch_submit(self, page, mode):
+        logger.info("💀 ENTERING DEATHMATCH SUBMISSION LOOP...")
+        
+        # تعبئة النموذج مرة واحدة بذكاء
+        self.robust_fill_form(page)
+        
+        for i in range(10):
+            if not self.solve_captcha(page, mode):
+                if page.locator("input[name='lastname']").count() > 0: continue
+                return False 
+            
+            try: page.wait_for_load_state("networkidle", timeout=5000)
+            except: pass
+            
+            content = page.content().lower()
+            if "appointment number" in content:
+                logger.info("🏆 VICTORY! APPOINTMENT SECURED.")
+                try: send_photo(page.screenshot(), "✅ VICTORY!")
+                except: pass
+                return True
+            
+            if page.locator("input[name='lastname']").count() > 0:
+                logger.warning(f"⚔️ Silent Reject (Attempt {i+1}). Retrying...")
+                continue
+            
+            if "error" in content:
+                logger.error("❌ Server Error.")
+                return False
+                
+        return False
+
     # ---------------------------------------------------------
-    # 7. Main Engine
+    # 6. المحرك الرئيسي (Main Engine)
     # ---------------------------------------------------------
     def run(self):
         with sync_playwright() as p:
@@ -233,73 +314,73 @@ class EliteSniper:
                     
                     mode = self.get_mode()
                     
-                    # ZERO HOUR WAIT
                     if mode == "WARMUP" and self.get_precise_time().minute >= 58:
                          self.wait_for_zero_hour()
                          mode = "BEAST"
 
-                    # 1. PRIORITY SCANNING
-                    # Months relative to current: 3 -> 4 -> 2 -> 5 (Example logic)
                     today = datetime.date.today()
-                    # Calculate target months dynamically
+                    # استراتيجية المسح (3 أشهر للأمام)
                     targets = []
-                    # Logic: If April (4), Priority is +2 months (June), +3 months (July)
-                    # Adjust 'range' to produce priority list. 
-                    # Simulating explicit priority for demo: [2, 3, 1, 4] offset indices
-                    priority_offsets = [2, 3, 1, 4] 
-                    
-                    for off in priority_offsets:
-                        d = today + datetime.timedelta(days=30*off)
+                    for i in range(3): 
+                        d = today + datetime.timedelta(days=30*i)
                         date_str = d.strftime("15.%m.%Y")
-                        targets.append(f"{self.base_url.split('&dateStr')[0]}&dateStr={date_str}")
+                        base = self.base_url.split('&dateStr')[0]
+                        targets.append(f"{base}&dateStr={date_str}")
                     
                     for url in targets:
-                        # GHOST NAVIGATE
-                        try: page.goto(url, timeout=20000, wait_until="domcontentloaded")
+                        try: 
+                            to = 5000 if mode == "BEAST" else 15000
+                            page.goto(url, timeout=to, wait_until="domcontentloaded")
                         except: continue
 
-                        # Captcha Check (Is it valid here? Yes, it's Month View)
                         if page.locator("input[name='captchaText']").count() > 0:
                             if not self.solve_captcha(page, mode):
-                                if self.poisoned_session: break # Rebirth
+                                if self.poisoned_session: break 
                                 continue
                         
-                        # Check Poison (Did we bounce?)
                         if self.check_poison(page, "Month"): break
 
-                        # 2. SCAN DAYS
+                        # Scan Days
                         day_links = page.locator("a.arrow[href*='appointment_showDay']").all()
                         if day_links:
                             logger.info(f"🔥 DAYS FOUND! Ghost Jumping...")
                             href = day_links[0].get_attribute("href")
-                            page.goto(self.base_url.split("/extern")[0] + "/" + href)
+                            # بناء الرابط الكامل يدوياً للسرعة
+                            if "http" not in href:
+                                if href.startswith("/"): full_link = "https://service2.diplo.de" + href
+                                else: full_link = self.base_url.split("/extern")[0] + "/extern/" + href.split("/extern/")[-1]
+                            else: full_link = href
                             
-                            # Day Captcha
+                            page.goto(full_link)
+                            
                             if not self.solve_captcha(page, mode):
                                 if self.poisoned_session: break
                                 continue
 
-                            # 3. SCAN SLOTS
+                            # Scan Slots
                             time_links = page.locator("a.arrow[href*='appointment_showForm']").all()
                             if time_links:
                                 href = time_links[0].get_attribute("href")
                                 logger.info(f"⏰ SLOT FOUND! Ghost Jumping to Form...")
-                                page.goto(self.base_url.split("/extern")[0] + "/" + href)
                                 
-                                # Pre-Form Captcha
+                                if "http" not in href:
+                                    if href.startswith("/"): full_link = "https://service2.diplo.de" + href
+                                    else: full_link = self.base_url.split("/extern")[0] + "/extern/" + href.split("/extern/")[-1]
+                                else: full_link = href
+
+                                page.goto(full_link)
+                                
                                 if not self.solve_captcha(page, mode):
                                     if self.poisoned_session: break
                                     continue
                                 
-                                # Check Poison
                                 if self.check_poison(page, "Form"): break
 
-                                # 4. DEATHMATCH SUBMIT
-                                self.robust_fill_form(page)
+                                # بدء ملحمة الحجز
                                 if self.deathmatch_submit(page, mode):
-                                    return # Victory
+                                    time.sleep(9999) # التوقف للاحتفال
+                                    return 
                                 else:
-                                    # Failed 10 times, go back to scan
                                     break 
 
                 except Exception as e:
