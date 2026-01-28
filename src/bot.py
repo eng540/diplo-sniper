@@ -7,10 +7,9 @@ import ntplib
 from playwright.sync_api import sync_playwright
 
 # الحفاظ على الـ Imports الخاصة بنظامك كما هي
-from .config import Config
-from .captcha import CaptchaSolver
-from .notifier import send_alert, send_photo
-
+from src.config import Config
+from src.captcha import CaptchaSolver
+from src.notifier import send_alert, send_photo
 # ---------------------------------------------------------
 # 1. إعدادات السجل (كما هي)
 # ---------------------------------------------------------
