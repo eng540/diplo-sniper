@@ -1,56 +1,55 @@
-import time
-import logging
 import sys
 import os
+import time
+import logging
 
-# Add the parent directory to sys.path to allow running from src directly or root
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# --- حل مشكلة المسارات في الحاويات (Docker/Container Path Fix) ---
+# إضافة المسار الحالي ومسار مجلد src لضمان رؤية جميع الملفات
+current_dir = os.path.dirname(os.path.abspath(__file__))
+sys.path.append(current_dir)
+sys.path.append(os.path.join(current_dir, 'src'))
 
-# استيراد كود النخبة الذي جهزناه
-try:
-    from src.elite_sniper import EliteSniper
-except ImportError:
-    # Fallback if run from inside src
-    from elite_sniper import EliteSniper
-
-# إعداد السجلات للملف الرئيسي
-logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
+# إعداد السجلات
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s [%(levelname)s] %(message)s',
+    datefmt='%H:%M:%S'
+)
 logger = logging.getLogger("MainLauncher")
 
-def run_royal_unit():
-    """تشغيل وحدة ملكية واحدة مع نظام استعادة تلقائي"""
-    retry_count = 0
-    max_retries = 5 # عدد محاولات إعادة التشغيل في حال الانهيار الكلي
+# --- استيراد البوت بمرونة عالية ---
+try:
+    # المحاولة الأولى: الاستيراد كحزمة من src
+    from src.bot import DiploBot
+    logger.info("✅ Unit identified: DiploBot found in src.bot")
+except ImportError:
+    try:
+        # المحاولة الثانية: الاستيراد المباشر (إذا كان main داخل src)
+        from bot import DiploBot
+        logger.info("✅ Unit identified: DiploBot found in direct path")
+    except ImportError as e:
+        logger.critical(f"❌ Failed to find Bot module. Error: {e}")
+        sys.exit(1)
 
-    while retry_count < max_retries:
+def run_king_unit():
+    """تشغيل الوحدة الملكية مع نظام الاستعادة التلقائي"""
+    while True:
         try:
-            logger.info(f"👑 KING SNIPER PROTOCOL: Launching Royal Unit (Attempt {retry_count + 1})...")
+            logger.info("👑 KING SNIPER PROTOCOL: Launching Royal Unit...")
             
-            # إنشاء كائن البوت وتشغيله
-            bot = EliteSniper()
+            # تشغيل نسخة واحدة فقط كما طلبت
+            bot = DiploBot()
             bot.run()
             
-            # إذا انتهت الدالة بنجاح (تحقق النصر)
-            logger.info("🏆 Mission Accomplished. Unit shutting down gracefully.")
-            break
+            # إذا وصل الكود هنا، فهذا يعني أن عملية الحجز تمت بنجاح
+            logger.info("🏆 MISSION ACCOMPLISHED: Appointment Secured.")
+            break 
 
         except Exception as e:
-            retry_count += 1
             logger.error(f"⚠️ Unit Crashed: {e}")
-            
-            if retry_count < max_retries:
-                wait_time = 10  # انتظر 10 ثوانٍ قبل محاولة الولادة من جديد
-                logger.info(f"♻️ Re-initiating protocol in {wait_time} seconds...")
-                time.sleep(wait_time)
-            else:
-                logger.critical("🚨 MAX RETRIES REACHED. Manual intervention required.")
+            wait_time = 15
+            logger.info(f"♻️ Re-initiating protocol in {wait_time} seconds...")
+            time.sleep(wait_time)
 
 if __name__ == "__main__":
-    print("""
-    *****************************************
-    * KING SNIPER - ELITE EDITION      *
-    * Target: Muscat Appointment       *
-    * Status: Single Unit (Heavy)      *
-    *****************************************
-    """)
-    run_royal_unit()
+    run_king_unit()
