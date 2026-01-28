@@ -1,9 +1,7 @@
 """
 ElitePro Sniper - النسخة النهائية للإنتاج
 الإصدار: 10.0.0 (Production Ready)
-الوصف: نظام حجز مواعيد دبلوماسي متكامل وآمن
-الميزات: ديناميكية مطلقة، معالجة أخطاء شاملة، توافق تام مع بيئة الإنتاج
-التاريخ: 2024
+ملاحظة: تم تغيير اسم الفئة إلى EliteSniper ليتوافق مع متطلبات الاستيراد
 """
 
 import time
@@ -19,14 +17,22 @@ import pytz
 from playwright.sync_api import sync_playwright, Page, BrowserContext, Browser
 
 # ==================== IMPORTS الأساسية ====================
+# تم تعديل المسار ليتوافق مع الهيكل الشائع
 try:
-    from src.config import Config
-    from src.captcha import CaptchaSolver
-    from src.notifier import send_alert, send_photo
-except ImportError as e:
-    print(f"❌ خطأ في استيراد التكوين: {e}")
-    print("⚠️ تأكد من وجود ملفات: config.py, captcha.py, notifier.py")
-    sys.exit(1)
+    # محاولة استيراد من المسار المباشر
+    from config import Config
+    from captcha import CaptchaSolver
+    from notifier import send_alert, send_photo
+except ImportError:
+    try:
+        # محاولة استيراد من المسار النسبي
+        from .config import Config
+        from .captcha import CaptchaSolver
+        from .notifier import send_alert, send_photo
+    except ImportError as e:
+        print(f"❌ خطأ في استيراد التكوين: {e}")
+        print("⚠️ تأكد من وجود ملفات: config.py, captcha.py, notifier.py")
+        sys.exit(1)
 
 # ==================== إعدادات السجل ====================
 logging.basicConfig(
@@ -39,7 +45,7 @@ logging.basicConfig(
         else logging.NullHandler()
     ]
 )
-logger = logging.getLogger("ElitePro")
+logger = logging.getLogger("EliteSniper")
 
 # ==================== فئات البيانات ====================
 class FieldMapping:
@@ -62,12 +68,10 @@ class FieldMapping:
         }
 
 # ==================== الفئة الرئيسية ====================
-class EliteProSniper:
+class EliteSniper:  # ⚠️ تم تغيير الاسم من EliteProSniper إلى EliteSniper
     """
-    النسخة النهائية المتكاملة للإنتاج
-    - ديناميكية مطلقة في تعيين الحقول
-    - معالجة أخطاء شاملة
-    - توافق كامل مع بيئة الإنتاج
+    EliteSniper - النسخة النهائية المتكاملة للإنتاج
+    تم تغيير اسم الفئة ليتوافق مع متطلبات الاستيراد
     """
     
     def __init__(self):
@@ -102,7 +106,7 @@ class EliteProSniper:
             'success': False
         }
         
-        logger.info(f"🚀 ElitePro Sniper v10.0.0 - Session: {self.session_id}")
+        logger.info(f"🚀 EliteSniper v10.0.0 - Session: {self.session_id}")
     
     def _validate_config(self) -> None:
         """التحقق من صحة التكوين"""
@@ -202,14 +206,6 @@ class EliteProSniper:
             
             // إخفاء Chrome runtime
             window.chrome = { runtime: {} };
-            
-            // تعديل permissions
-            const originalQuery = window.navigator.permissions.query;
-            window.navigator.permissions.query = (parameters) => (
-                parameters.name === 'notifications' ?
-                    Promise.resolve({ state: Notification.permission }) :
-                    originalQuery(parameters)
-            );
             """
             
             page.add_init_script(stealth_script)
@@ -242,7 +238,6 @@ class EliteProSniper:
         حل الكابتشا بذكاء مع معالجة أخطاء شاملة
         """
         max_attempts = 3
-        wait_between_attempts = 1.0  # ثانية
         
         for attempt in range(1, max_attempts + 1):
             try:
@@ -331,7 +326,7 @@ class EliteProSniper:
                         return True
                     else:
                         logger.warning(f"⚠️ [{location}] الكابتشا مازالت موجودة، إعادة المحاولة")
-                        page.wait_for_timeout(wait_between_attempts * 1000)
+                        page.wait_for_timeout(1000)
                         continue
                         
                 except Exception as e:
@@ -936,7 +931,7 @@ class EliteProSniper:
     def run(self):
         """الدورة الرئيسية للتشغيل"""
         logger.info("="*60)
-        logger.info("🚀 بدء تشغيل ElitePro Sniper v10.0.0")
+        logger.info("🚀 بدء تشغيل EliteSniper v10.0.0")
         logger.info("="*60)
         
         try:
@@ -969,7 +964,6 @@ class EliteProSniper:
                     
                     logger.info(f"\n🔁 الدورة #{cycle}")
                     logger.info(f"📊 النمط: {self.get_operational_mode()}")
-                    logger.info(f"📈 الإحصاءات: {json.dumps(self.stats, indent=2, default=str)}")
                     
                     # التحقق من الأخطاء المتتالية
                     if self.consecutive_errors >= 10:
@@ -1080,34 +1074,36 @@ class EliteProSniper:
             
         except Exception as e:
             logger.error(f"💀 خطأ حرج: {e}")
-            logger.exception("تفاصيل الخطأ:")
+            import traceback
+            traceback.print_exc()
             return False
 
 
 # ==================== نقطة الدخول الرئيسية ====================
-if __name__ == "__main__":
+def main():
     """
     نقطة الدخول الرئيسية للبرنامج
-    الاستخدام: python elite_sniper.py
     """
-    
     print("="*60)
-    print("🎯 ElitePro Sniper v10.0.0 - نظام الحجز الدبلوماسي")
+    print("🎯 EliteSniper v10.0.0 - نظام الحجز الدبلوماسي")
     print("="*60)
     
     try:
-        sniper = EliteProSniper()
+        sniper = EliteSniper()
         success = sniper.run()
         
         if success:
             print("\n✅ التشغيل مكتمل بنجاح!")
-            sys.exit(0)
+            return 0
         else:
             print("\n❌ انتهى التشغيل بدون نجاح")
-            sys.exit(1)
+            return 1
             
     except Exception as e:
         print(f"\n💀 خطأ فادح: {e}")
         import traceback
         traceback.print_exc()
-        sys.exit(1)
+        return 1
+
+if __name__ == "__main__":
+    sys.exit(main())
