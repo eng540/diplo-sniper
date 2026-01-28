@@ -3,16 +3,15 @@ import random
 import datetime
 import logging
 import pytz
-import re
+import ntplib
 from playwright.sync_api import sync_playwright
 
-# Assuming these modules exist based on the file list
 from .config import Config
 from .captcha import CaptchaSolver
 from .notifier import send_alert, send_photo
 
 # ---------------------------------------------------------
-# 1. Logging Setup
+# 1. Logging Speed & Precision
 # ---------------------------------------------------------
 logging.basicConfig(
     level=logging.INFO,
@@ -20,226 +19,204 @@ logging.basicConfig(
     datefmt='%H:%M:%S',
     handlers=[logging.StreamHandler()]
 )
-logger = logging.getLogger("KingSniper")
+logger = logging.getLogger("EliteSniper")
 
-class KingSniper:
+class EliteSniper:
     def __init__(self):
         self.solver = CaptchaSolver()
         self.base_url = Config.TARGET_URL + "&request_locale=en"
-        # Timezone for "Time Ambush"
         self.tz_yemen = pytz.timezone('Asia/Aden')
-        
+        self.time_offset = 0
         self.user_agents = [
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_4_1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"
+             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+             "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_4_1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
         ]
-        
         self.poisoned_session = False
+        
+        # NTP Sync on init
+        self.sync_time()
 
     # ---------------------------------------------------------
-    # 2. Time Strategy (Patrol, Warmup, Beast)
+    # 2. Time Warfare (NTP & Zero Hour)
     # ---------------------------------------------------------
+    def sync_time(self):
+        try:
+            client = ntplib.NTPClient()
+            response = client.request('pool.ntp.org', version=3)
+            self.time_offset = response.offset
+            logger.info(f"⏱️ Time Synced. Offset: {self.time_offset:.4f}s")
+        except:
+            logger.warning("⚠️ NTP Sync Failed. Using local time.")
+
+    def get_precise_time(self):
+        return datetime.datetime.now(self.tz_yemen) + datetime.timedelta(seconds=self.time_offset)
+
+    def wait_for_zero_hour(self):
+        target_hour = 1
+        target_minute = 59
+        target_second = 50
+        
+        while True:
+            now = self.get_precise_time()
+            if now.hour == target_hour and now.minute == target_minute and now.second >= target_second:
+                logger.info("⚔️ ZERO HOUR REACHED! LAUNCHING ATTACK!")
+                break
+            
+            # Blocking wait for precision (no sleep inside critical window)
+            if now.hour == target_hour and now.minute == target_minute and now.second > 45:
+                pass # Busy wait
+            else:
+                time.sleep(0.5)
+
     def get_mode(self):
-        now = datetime.datetime.now(self.tz_yemen)
-        if (now.hour == 1 and now.minute >= 58) or (now.hour == 2 and now.minute <= 5):
+        now = self.get_precise_time()
+        # Beast Mode: 01:59:50 to 02:05:00
+        if (now.hour == 1 and now.minute == 59 and now.second >= 50) or (now.hour == 2 and now.minute <= 5):
             return "BEAST"
         if now.hour == 1 and now.minute >= 45:
             return "WARMUP"
         return "PATROL"
 
     # ---------------------------------------------------------
-    # 3. Rebirth Protocol (Session Poison/Soft Ban Recovery)
+    # 3. Infrastructure (Rebirth & Resource Blocking)
     # ---------------------------------------------------------
     def rebirth(self, context, browser):
-        logger.critical("☣️ SESSION POISONED/BOUNCED! INITIATING REBIRTH...")
-        send_alert("⚠️ Session Poisoned! Rebirthing...")
-        
+        logger.critical("☣️ REBIRTH PROTOCOL ACTIVATED.")
         try: context.close()
         except: pass
         
         mode = self.get_mode()
-        sleep_time = 0.5 if mode == "BEAST" else random.uniform(5, 10)
+        sleep_time = 0.5 if mode == "BEAST" else random.uniform(5, 8)
         time.sleep(sleep_time)
         
         new_context = browser.new_context(
             user_agent=random.choice(self.user_agents),
-            viewport={"width": 1366 + random.randint(0, 50), "height": 768 + random.randint(0, 50)},
+            viewport={"width": 1366, "height": 768},
             locale="en-US",
             timezone_id="Asia/Aden"
         )
         
-        new_page = new_context.new_page()
-        # Hide automation
-        new_page.add_init_script("""Object.defineProperty(navigator, 'webdriver', { get: () => undefined });""")
+        page = new_context.new_page()
+        page.add_init_script("Object.defineProperty(navigator, 'webdriver', { get: () => undefined });")
         
-        logger.info("✨ REBIRTH COMPLETE. New Identity Active.")
+        # AGGRESSIVE RESOURCE BLOCKING
+        page.route("**/*", lambda route: route.abort() 
+                   if route.request.resource_type in ["image", "media", "font", "stylesheet"] 
+                   else route.continue_())
+
         self.poisoned_session = False
-        return new_context, new_page
+        logger.info("✨ REBIRTH COMPLETE.")
+        return new_context, page
 
     # ---------------------------------------------------------
-    # 4. "Surgeon's Injection" (Bypass Constraints)
+    # 4. Injection & Ghost Click
     # ---------------------------------------------------------
     def fast_inject(self, page, selector, value):
-        """Injects value directly into DOM, bypassing onpaste/onkeypress"""
+        if page.locator(selector).count() == 0: return False
         try:
-            # Check existence first to avoid errors
-            if page.locator(selector).count() == 0:
-                return False
-                
             page.evaluate(f"""
                 const el = document.querySelector("{selector}");
-                if(el) {{ 
-                    el.value = "{value}"; 
-                    // Dispatch events to satisfy frameworks/listeners
-                    el.dispatchEvent(new Event('input', {{ bubbles: true }})); 
-                    el.dispatchEvent(new Event('change', {{ bubbles: true }})); 
-                    el.dispatchEvent(new Event('blur', {{ bubbles: true }})); 
-                }}
+                if(el) {{ el.value = "{value}"; el.dispatchEvent(new Event('change', {{bubbles:true}})); }}
             """)
             return True
-        except Exception as e:
-            logger.warning(f"Injection Failed for {selector}: {e}")
-            return False
-            
-    def robust_fill_form(self, page):
-        """Fills form using Label Mapping + Injection"""
-        # Map known labels to Config values
-        field_map = {
-            "lastname": Config.LAST_NAME,
-            "family name": Config.LAST_NAME,
-            "firstname": Config.FIRST_NAME,
-            "email*": Config.EMAIL,
-            "repeat email": Config.EMAIL, # Capture "Repeat email:" label
-            "passport number": Config.PASSPORT,
-            "telephone number": Config.PHONE,
-            "purpose of your stay": "student" # Keyword for select
-        }
+        except: return False
 
-        # 1. Standard Fields (Lastname, Firstname, Email)
+    def robust_fill_form(self, page):
+        # 1. Standard Fields
         self.fast_inject(page, "input[name='lastname']", Config.LAST_NAME)
         self.fast_inject(page, "input[name='firstname']", Config.FIRST_NAME)
         self.fast_inject(page, "input[name='email']", Config.EMAIL)
-        
-        # 2. Variable Fields (Email Repeat)
-        # Try standard names first
         if not self.fast_inject(page, "input[name='emailrepeat']", Config.EMAIL):
              self.fast_inject(page, "input[name='emailRepeat']", Config.EMAIL)
 
-        # 3. Dynamic Fields (Passport, Phone) - Try Definition ID Mapping if possible, else Labels, else Index
-        # Looking for labels with specific text to find the 'for' attribute
+        # 2. Dynamic Fields (Passport/Phone) via ID Finding or Fallback
+        passport = Config.PASSPORT
+        phone = Config.PHONE.replace("+", "00").strip()
         
-        # Passport
-        passport_input_id = self.find_input_id_by_label(page, "Passport number")
-        if passport_input_id:
-            logger.info(f"Targeting Passport Field: #{passport_input_id}")
-            self.fast_inject(page, f"#{passport_input_id}", Config.PASSPORT)
-        else:
-             # Fallback to Index [0]
-             self.fast_inject(page, "input[name='fields[0].content']", Config.PASSPORT)
+        # Try finding by Definition ID (Most robust if known) logic or fallbacks
+        if not self.fast_inject(page, "input[name='fields[0].content']", passport):
+             # Try label search
+             pass 
+        self.fast_inject(page, "input[name='fields[1].content']", phone)
 
-        # Phone
-        phone_input_id = self.find_input_id_by_label(page, "Telephone number")
-        phone_val = Config.PHONE.replace("+", "00").strip()
-        if phone_input_id:
-            self.fast_inject(page, f"#{phone_input_id}", phone_val)
-        else:
-             self.fast_inject(page, "input[name='fields[1].content']", phone_val)
-
-        # Purpose (Select)
+        # 3. Select Category
         try:
-            # Try to find select by label "Purpose"
-            # Or just use the first select found in the dynamic area
-            page.evaluate("""
-                const selects = document.querySelectorAll('select');
-                for (let s of selects) {
-                    for (let opt of s.options) {
-                        if (opt.text.toLowerCase().includes('study') || opt.text.toLowerCase().includes('student') || opt.text.toLowerCase().includes('speech')) {
-                            s.value = opt.value;
-                            s.dispatchEvent(new Event('change', { bubbles: true }));
-                            break;
-                        }
-                    }
-                    if (s.selectedIndex <= 0 && s.options.length > 1) {
-                         s.selectedIndex = 1; // Default to first available
-                         s.dispatchEvent(new Event('change', { bubbles: true }));
-                    }
-                }
-            """)
+            page.evaluate("document.querySelector('select').selectedIndex = 1; document.querySelector('select').dispatchEvent(new Event('change'));")
         except: pass
 
-    def find_input_id_by_label(self, page, label_text):
-        try:
-            # Find label containing text
-            return page.evaluate(f"""
-                () => {{
-                    const labels = Array.from(document.querySelectorAll('label'));
-                    const target = labels.find(l => l.innerText.toLowerCase().includes("{label_text.lower()}"));
-                    return target ? target.getAttribute('for') : null;
-                }}
-            """)
-        except: return None
-
     # ---------------------------------------------------------
-    # 5. Poison Detection (The "Pulse Check")
+    # 5. Deathmatch Loop (Form Submission)
     # ---------------------------------------------------------
-    def check_session_poison(self, page):
-        """Returns True if session is dead/bounced"""
-        try:
-            # 1. Check for Month Captcha Form on non-month pages
-            if page.locator("form#appointment_captcha_month").count() > 0:
-                logger.warning("☠️ POISON DETECTED: Bounced to Month Captcha.")
-                self.poisoned_session = True
+    def deathmatch_submit(self, page, mode):
+        logger.info("💀 ENTERING DEATHMATCH SUBMISSION LOOP (10 Attempts)...")
+        
+        for i in range(10):
+            # 1. Solve Captcha
+            if not self.solve_captcha(page, mode):
+                # If captcha failed but form still there, retry loop
+                if page.locator("input[name='lastname']").count() > 0: continue
+                return False # Lost the page
+            
+            # 2. Check Result
+            try: page.wait_for_load_state("networkidle", timeout=5000)
+            except: pass
+            
+            content = page.content().lower()
+            if "appointment number" in content:
+                logger.info("🏆 VICTORY! APPOINTMENT SECURED.")
+                send_photo(page.screenshot(), "✅ VICTORY!")
                 return True
             
-            # 2. Global Error
-            if page.locator("div.global-error").count() > 0:
-                 logger.warning("☠️ POISON DETECTED: Global Error Div.")
-                 self.poisoned_session = True
-                 return True
-                 
-            return False
-        except: return False
-
-    # ---------------------------------------------------------
-    # 6. Captcha Logic with Poison Check
-    # ---------------------------------------------------------
-    def solve_captcha(self, page, mode):
-        # Basic check
-        if not page.locator("input[name='captchaText']").is_visible():
-            return True
-
-        if mode == "PATROL": time.sleep(random.uniform(1, 2))
-
-        try:
-            captcha_div = page.locator("captcha > div").first
-            if captcha_div.is_visible():
+            # Silent Reject?
+            if page.locator("input[name='lastname']").count() > 0:
+                logger.warning(f"⚔️ Silent Reject (Attempt {i+1}). RELOADING WEAPON...")
+                continue # Immediate loop
+            
+            # Error Page?
+            if "error" in content:
+                logger.error("❌ Server Error.")
+                return False
                 
-                # Check for "Black Captcha" (Size check)
-                img_bytes = captcha_div.screenshot()
-                if len(img_bytes) < 1500:
-                    logger.critical("⚫ BLACK CAPTCHA DETECTED.")
-                    self.poisoned_session = True
-                    return False
-
-                code = self.solver.solve(img_bytes).replace(" ", "").strip()
-                if len(code) > 3:
-                    logger.info(f"🧩 Solving: {code}")
-                    self.fast_inject(page, "input[name='captchaText']", code)
-                    page.keyboard.press("Enter")
-                    
-                    try: page.wait_for_load_state("domcontentloaded", timeout=4000)
-                    except: pass
-                    
-                    # Did we bounce back?
-                    if self.check_session_poison(page): return False
-                    
-                    return not page.locator("input[name='captchaText']").is_visible()
-        except: pass
         return False
 
     # ---------------------------------------------------------
-    # 7. Main Loop with "Ghost Click"
+    # 6. Checks & Solvers
+    # ---------------------------------------------------------
+    def check_poison(self, page, location="Unknown"):
+        # Context-Aware: Month Captcha is ONLY poison if we are NOT in Month View
+        # But for safety, we rely mainly on "Black Captcha" detection or "Bounced back" logic
+        if location == "Form" and page.locator("form#appointment_captcha_month").count() > 0:
+            logger.warning("☠️ POISON: Bounced to Month Captcha from Form.")
+            self.poisoned_session = True
+            return True
+        return False
+
+    def solve_captcha(self, page, mode):
+        if not page.locator("input[name='captchaText']").is_visible(): return True
+        
+        captcha_div = page.locator("captcha > div").first
+        if captcha_div.is_visible():
+            img_bytes = captcha_div.screenshot()
+            # Black Captcha Check
+            if len(img_bytes) < 1500:
+                logger.critical("⚫ BLACK CAPTCHA. POISONED.")
+                self.poisoned_session = True
+                return False
+                
+            code = self.solver.solve(img_bytes).replace(" ","")
+            if len(code) > 3:
+                self.fast_inject(page, "input[name='captchaText']", code)
+                page.keyboard.press("Enter")
+                try: page.wait_for_load_state("domcontentloaded", timeout=3000)
+                except: pass
+                
+                # Check if still there
+                if page.locator("input[name='captchaText']").is_visible(): return False
+                return True
+        return False
+
+    # ---------------------------------------------------------
+    # 7. Main Engine
     # ---------------------------------------------------------
     def run(self):
         with sync_playwright() as p:
@@ -247,93 +224,87 @@ class KingSniper:
                 headless=True, 
                 args=["--disable-blink-features=AutomationControlled", "--no-sandbox", "--disable-gpu"]
             )
-            
             context, page = self.rebirth(None, browser)
-            logger.info("👑 KING SNIPER (Reforged) ONLINE.")
 
             while True:
                 try:
-                    if self.poisoned_session:
+                    if self.poisoned_session: 
                         context, page = self.rebirth(context, browser)
-                        continue
-
+                    
                     mode = self.get_mode()
                     
-                    # Patrol logic (Simplified for brevity)
-                    valid_urls = self.get_target_urls() 
+                    # ZERO HOUR WAIT
+                    if mode == "WARMUP" and self.get_precise_time().minute >= 58:
+                         self.wait_for_zero_hour()
+                         mode = "BEAST"
+
+                    # 1. PRIORITY SCANNING
+                    # Months relative to current: 3 -> 4 -> 2 -> 5 (Example logic)
+                    today = datetime.date.today()
+                    # Calculate target months dynamically
+                    targets = []
+                    # Logic: If April (4), Priority is +2 months (June), +3 months (July)
+                    # Adjust 'range' to produce priority list. 
+                    # Simulating explicit priority for demo: [2, 3, 1, 4] offset indices
+                    priority_offsets = [2, 3, 1, 4] 
                     
-                    for url in valid_urls:
-                        try:
-                            page.goto(url, timeout=30000, wait_until="domcontentloaded")
+                    for off in priority_offsets:
+                        d = today + datetime.timedelta(days=30*off)
+                        date_str = d.strftime("15.%m.%Y")
+                        targets.append(f"{self.base_url.split('&dateStr')[0]}&dateStr={date_str}")
+                    
+                    for url in targets:
+                        # GHOST NAVIGATE
+                        try: page.goto(url, timeout=20000, wait_until="domcontentloaded")
                         except: continue
 
-                        if self.check_session_poison(page): break
+                        # Captcha Check (Is it valid here? Yes, it's Month View)
+                        if page.locator("input[name='captchaText']").count() > 0:
+                            if not self.solve_captcha(page, mode):
+                                if self.poisoned_session: break # Rebirth
+                                continue
                         
-                        if not self.solve_captcha(page, mode):
-                            if self.poisoned_session: break
-                            continue
+                        # Check Poison (Did we bounce?)
+                        if self.check_poison(page, "Month"): break
 
-                        # GHOST CLICK IMPLEMENTATION
-                        # Instead of clicking 'a.arrow', assume we parse hrefs for speed
-                        
-                        # 1. Day Selection
+                        # 2. SCAN DAYS
                         day_links = page.locator("a.arrow[href*='appointment_showDay']").all()
                         if day_links:
-                            logger.info(f"🔥 {len(day_links)} DAYS FOUND!")
+                            logger.info(f"🔥 DAYS FOUND! Ghost Jumping...")
+                            href = day_links[0].get_attribute("href")
+                            page.goto(self.base_url.split("/extern")[0] + "/" + href)
                             
-                            # Ghost Click: Get HREF and Jump
-                            target_href = day_links[0].get_attribute("href")
-                            if target_href:
-                                logger.info(f"👻 Ghost Jump to Day: {target_href}")
-                                page.goto(self.base_url.split("/extern")[0] + "/" + target_href)
-                            else:
-                                day_links[0].click() # Fallback
-
-                            if self.check_session_poison(page): break
+                            # Day Captcha
                             if not self.solve_captcha(page, mode):
                                 if self.poisoned_session: break
                                 continue
-                            
-                            # 2. Time Selection
-                            # Search for 'appointment_showForm' in 'a.arrow'
+
+                            # 3. SCAN SLOTS
                             time_links = page.locator("a.arrow[href*='appointment_showForm']").all()
                             if time_links:
-                                target_href = time_links[0].get_attribute("href")
-                                opening_period_id = "UNKNOWN"
-                                if "openingPeriodId=" in target_href:
-                                     opening_period_id = target_href.split("openingPeriodId=")[1].split("&")[0]
-
-                                logger.info(f"⏰ TIME FOUND! ID: {opening_period_id}. Ghost Jumping...")
-                                page.goto(self.base_url.split("/extern")[0] + "/" + target_href)
-
-                                if self.check_session_poison(page): break
+                                href = time_links[0].get_attribute("href")
+                                logger.info(f"⏰ SLOT FOUND! Ghost Jumping to Form...")
+                                page.goto(self.base_url.split("/extern")[0] + "/" + href)
+                                
+                                # Pre-Form Captcha
                                 if not self.solve_captcha(page, mode):
                                     if self.poisoned_session: break
                                     continue
+                                
+                                # Check Poison
+                                if self.check_poison(page, "Form"): break
 
-                                # 3. Booking Form
+                                # 4. DEATHMATCH SUBMIT
                                 self.robust_fill_form(page)
-                                # Submit
-                                if self.solve_captcha(page, mode):
-                                    if self.check_session_poison(page): break
-                                    logger.info("🚀 Submitted. Checking for Success...")
-                                    # ... Success check logic ...
-                                    return 
+                                if self.deathmatch_submit(page, mode):
+                                    return # Victory
+                                else:
+                                    # Failed 10 times, go back to scan
+                                    break 
 
                 except Exception as e:
                     logger.error(f"Loop Error: {e}")
-                    time.sleep(5)
-
-    def get_target_urls(self):
-        # Helper to generate current targets
-        urls = []
-        today = datetime.date.today()
-        for i in range(2): # Look 2 months ahead
-             d = today + datetime.timedelta(days=30*i)
-             date_str = d.strftime("15.%m.%Y")
-             urls.append(f"{self.base_url.split('&dateStr')[0]}&dateStr={date_str}")
-        return urls
+                    time.sleep(1)
 
 if __name__ == "__main__":
-    bot = KingSniper()
-    bot.run()
+    EliteSniper().run()
