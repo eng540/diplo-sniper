@@ -1,30 +1,56 @@
-import threading
 import time
-# التغيير الجوهري: استيراد KingSniper بدلاً من DiploBot
-from src.bot import KingSniper 
+import logging
+import sys
+import os
 
-def start_bot(instance_id):
-    try:
-        print(f"⚔️ Launching King Unit-{instance_id}...")
-        # إنشاء نسخة جديدة من الملك
-        bot = KingSniper()
-        # تشغيل البوت
-        bot.run()
-    except Exception as e:
-        print(f"⚠️ King Unit-{instance_id} Crashed: {e}")
+# Add the parent directory to sys.path to allow running from src directly or root
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+# استيراد كود النخبة الذي جهزناه
+try:
+    from src.elite_sniper import EliteSniper
+except ImportError:
+    # Fallback if run from inside src
+    from elite_sniper import EliteSniper
+
+# إعداد السجلات للملف الرئيسي
+logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
+logger = logging.getLogger("MainLauncher")
+
+def run_royal_unit():
+    """تشغيل وحدة ملكية واحدة مع نظام استعادة تلقائي"""
+    retry_count = 0
+    max_retries = 5 # عدد محاولات إعادة التشغيل في حال الانهيار الكلي
+
+    while retry_count < max_retries:
+        try:
+            logger.info(f"👑 KING SNIPER PROTOCOL: Launching Royal Unit (Attempt {retry_count + 1})...")
+            
+            # إنشاء كائن البوت وتشغيله
+            bot = EliteSniper()
+            bot.run()
+            
+            # إذا انتهت الدالة بنجاح (تحقق النصر)
+            logger.info("🏆 Mission Accomplished. Unit shutting down gracefully.")
+            break
+
+        except Exception as e:
+            retry_count += 1
+            logger.error(f"⚠️ Unit Crashed: {e}")
+            
+            if retry_count < max_retries:
+                wait_time = 10  # انتظر 10 ثوانٍ قبل محاولة الولادة من جديد
+                logger.info(f"♻️ Re-initiating protocol in {wait_time} seconds...")
+                time.sleep(wait_time)
+            else:
+                logger.critical("🚨 MAX RETRIES REACHED. Manual intervention required.")
 
 if __name__ == "__main__":
-    print("👑 KING HYDRA PROTOCOL INITIATED: Launching 3 Royal Units...")
-    
-    threads = []
-    # تشغيل 3 وحدات متوازية (يمكنك زيادة الرقم إذا كان السيرفر يتحمل)
-    for i in range(1, 4):
-        t = threading.Thread(target=start_bot, args=(i,))
-        t.start()
-        threads.append(t)
-        # فاصل زمني بسيط جداً عند التشغيل لتجنب خنق المعالج لحظة الإقلاع
-        time.sleep(2) 
-
-    # إبقاء البرنامج الرئيسي يعمل طالما الوحدات تعمل
-    for t in threads:
-        t.join()
+    print("""
+    *****************************************
+    * KING SNIPER - ELITE EDITION      *
+    * Target: Muscat Appointment       *
+    * Status: Single Unit (Heavy)      *
+    *****************************************
+    """)
+    run_royal_unit()
