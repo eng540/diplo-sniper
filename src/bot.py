@@ -23,9 +23,9 @@ from playwright.sync_api import sync_playwright, Page, BrowserContext, Browser
 
 # ==================== IMPORTS الأساسية ====================
 try:
-    from .config import Config
-    from .captcha import CaptchaSolver
-    from .notifier import send_alert, send_photo
+    from src.config import Config
+    from src.captcha import CaptchaSolver
+    from src.notifier import send_alert, send_photo
 except ImportError as e:
     print(f"❌ خطأ في استيراد التكوين: {e}")
     print("⚠️ تأكد من وجود ملفات: config.py, captcha.py, notifier.py")
