@@ -10,7 +10,7 @@ import os
 import time
 import logging
 from typing import Optional, Tuple
-from .config import Config
+from src.config import Config
 
 logger = logging.getLogger("Notifier")
 
