@@ -1,6 +1,9 @@
 """
-EliteSniper - النسخة المُحسنة لبيئة Railway
-إصدار: 10.1.0 (Railway Optimized)
+King Sniper v11.0.0 - النسخة النهائية المحسنة للإنتاج
+الإصدار: 11.0.0 (Production Ready - Enhanced)
+الوصف: نظام حجز مواعيد دبلوماسي فائق السرعة والأمان
+الميزات: حقن DOM مباشر، مزامنة NTP، إدارة جلسات ذكية
+التاريخ: 2024
 """
 
 import time
@@ -10,48 +13,68 @@ import logging
 import re
 import sys
 import json
-import os
 from typing import Optional, List, Dict, Tuple, Any
+from urllib.parse import urljoin, urlparse
+from datetime import timedelta
 
 import pytz
+import ntplib
 from playwright.sync_api import sync_playwright, Page, BrowserContext, Browser
 
 # ==================== IMPORTS الأساسية ====================
 try:
-    from src.config import Config
-    from src.captcha import CaptchaSolver
-    from src.notifier import send_alert, send_photo
-except ImportError:
-    try:
-        from src.config import Config
-        from src.captcha import CaptchaSolver
-        from src.notifier import send_alert, send_photo
-    except ImportError as e:
-        print(f"❌ خطأ في استيراد التكوين: {e}")
-        print("⚠️ تأكد من وجود ملفات: config.py, captcha.py, notifier.py")
-        sys.exit(1)
+    from .config import Config
+    from .captcha import CaptchaSolver
+    from .notifier import send_alert, send_photo
+except ImportError as e:
+    print(f"❌ خطأ في استيراد التكوين: {e}")
+    print("⚠️ تأكد من وجود ملفات: config.py, captcha.py, notifier.py")
+    sys.exit(1)
 
 # ==================== إعدادات السجل ====================
 logging.basicConfig(
     level=getattr(Config, 'LOG_LEVEL', 'INFO'),
     format='%(asctime)s.%(msecs)03d [%(levelname)s] %(message)s',
     datefmt='%H:%M:%S',
-    handlers=[logging.StreamHandler()]
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler('king_sniper.log') if getattr(Config, 'ENABLE_FILE_LOG', False) 
+        else logging.NullHandler()
+    ]
 )
-logger = logging.getLogger("EliteSniper")
+logger = logging.getLogger("KingSniper")
 
-# ==================== إعدادات Railway ====================
-IS_RAILWAY = os.getenv('RAILWAY_ENVIRONMENT') == 'production' or os.getenv('RAILWAY_ENVIRONMENT') == 'development'
-IS_CONTAINER = os.getenv('CONTAINER') == 'true' or os.path.exists('/.dockerenv')
+# ==================== فئات البيانات ====================
+class FieldMapping:
+    """تمثيل تعيين الحقل الديناميكي"""
+    
+    def __init__(self, field_type: str, patterns: List[str], config_value: str):
+        self.field_type = field_type
+        self.patterns = patterns
+        self.value = config_value
+        self.found_name = None
+        self.found_selector = None
+    
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            'field_type': self.field_type,
+            'patterns': self.patterns,
+            'found_name': self.found_name,
+            'found_selector': self.found_selector,
+            'mapped': self.found_name is not None
+        }
 
 # ==================== الفئة الرئيسية ====================
-class EliteSniper:
+class KingSniper:
     """
-    EliteSniper - النسخة المُحسنة لبيئة Railway
+    النسخة النهائية المحسنة مع الحقن المباشر ومزامنة الوقت
+    - سرعة فائقة بحقن DOM مباشر
+    - دقة توقيت مع مزامنة NTP
+    - إدارة جلسات ذكية
     """
     
     def __init__(self):
-        """تهيئة النظام مع إعدادات Railway"""
+        """تهيئة النظام مع التحقق من التكوين"""
         self._validate_config()
         
         # المكونات الأساسية
@@ -59,42 +82,27 @@ class EliteSniper:
         self.base_url = self._prepare_base_url(Config.TARGET_URL)
         self.timezone = pytz.timezone(getattr(Config, 'TIMEZONE', 'Asia/Aden'))
         
-        # إعدادات متقدمة لـ Railway
-        self.is_railway = IS_RAILWAY
-        self.is_container = IS_CONTAINER
-        
-        # إعدادات المهلات الخاصة بـ Railway
-        if self.is_railway or self.is_container:
-            self.timeout_settings = {
-                'navigation': 45000,  # 45 ثانية للتنقل في Railway
-                'default': 30000,     # 30 ثانية للعمليات العامة
-                'captcha': 10000,     # 10 ثوانٍ للكابتشا
-                'loading': 25000      # 25 ثانية لتحميل الصفحات
-            }
-            logger.info("⚙️ تم تحميل إعدادات Railway المتقدمة")
-        else:
-            self.timeout_settings = {
-                'navigation': 30000,
-                'default': 20000,
-                'captcha': 8000,
-                'loading': 20000
-            }
+        # مزامنة الوقت
+        self.ntp_offset = 0.0
+        self.time_synced = False
+        self._sync_ntp_time()
         
         # إعدادات الأداء
-        self.user_agents = getattr(Config, 'USER_AGENTS', [
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_4_1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/124.0",
-            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-        ])
+        self.user_agents = [
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_4_1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 Edg/124.0.0.0"
+        ]
         
         # حالة النظام
         self.consecutive_errors = 0
-        self.session_id = f"session_{int(time.time())}_{random.randint(1000, 9999)}"
+        self.session_id = f"king_{int(time.time())}_{random.randint(1000, 9999)}"
         self.start_time = datetime.datetime.now()
         self.is_poisoned = False
+        self.current_user_agent = random.choice(self.user_agents)
         
-        # إحصاءات
+        # إحصاءات متقدمة
         self.stats = {
             'scans': 0,
             'captchas_solved': 0,
@@ -102,11 +110,16 @@ class EliteSniper:
             'forms_filled': 0,
             'errors': 0,
             'success': False,
-            'timeouts': 0
+            'poisoned_sessions': 0,
+            'dom_injections': 0,
+            'page_fills': 0,
+            'fast_mode_activations': 0,
+            'avg_fill_time_ms': 0,
+            'ntp_corrections': 0
         }
         
-        logger.info(f"🚀 EliteSniper v10.1.0 - Session: {self.session_id}")
-        logger.info(f"🌐 البيئة: {'Railway' if self.is_railway else 'Local'} | {'Container' if self.is_container else 'Native'}")
+        logger.info(f"👑 King Sniper v11.0.0 - Session: {self.session_id}")
+        logger.info(f"⏰ NTP Offset: {self.ntp_offset:.3f}s (Synced: {self.time_synced})")
     
     def _validate_config(self) -> None:
         """التحقق من صحة التكوين"""
@@ -137,574 +150,1290 @@ class EliteSniper:
                 return url + "?request_locale=en"
         return url
     
-    # ==================== إدارة المتصفح لـ Railway ====================
-    def create_railway_context(self, browser: Browser) -> Tuple[BrowserContext, Page]:
-        """إنشاء سياق محسّن لـ Railway"""
+    def _sync_ntp_time(self) -> None:
+        """مزامنة الوقت مع خوادم NTP"""
         try:
-            # إعدادات متقدمة لـ Railway
-            context_args = {
-                'user_agent': random.choice(self.user_agents),
-                'viewport': {
+            ntp_servers = [
+                'pool.ntp.org',
+                'time.google.com',
+                'time.windows.com',
+                'ntp.ubuntu.com'
+            ]
+            
+            for server in ntp_servers:
+                try:
+                    client = ntplib.NTPClient()
+                    response = client.request(server, timeout=3, version=3)
+                    
+                    # حساب الفرق بين الوقت المحلي والـ NTP
+                    self.ntp_offset = response.offset
+                    self.time_synced = True
+                    
+                    logger.info(f"⏰ مزامنة NTP مع {server}: offset={self.ntp_offset:.3f}s")
+                    return
+                    
+                except Exception as e:
+                    logger.debug(f"⚠️ فشل المزامنة مع {server}: {e}")
+                    continue
+            
+            logger.warning("⚠️ فشل جميع خوادم NTP، استخدام الوقت المحلي")
+            
+        except Exception as e:
+            logger.error(f"❌ خطأ في مزامنة NTP: {e}")
+    
+    def get_synced_time(self) -> datetime.datetime:
+        """الحصول على الوقت المصحح مع NTP"""
+        if self.time_synced:
+            corrected = datetime.datetime.now() + timedelta(seconds=self.ntp_offset)
+            self.stats['ntp_corrections'] += 1
+            return corrected
+        return datetime.datetime.now()
+    
+    # ==================== إدارة الوقت ====================
+    def get_operational_mode(self) -> str:
+        """تحديد نمط التشغيل مع التصحيح الزمني"""
+        try:
+            now = self.get_synced_time().astimezone(self.timezone)
+            
+            # النافذة الهجومية الموسعة: 01:59:45 - 02:10:10
+            if (now.hour == 1 and now.minute == 59 and now.second >= 45) or \
+               (now.hour == 2 and now.minute <= 10) or \
+               (now.hour == 2 and now.minute == 10 and now.second <= 10):
+                return "ASSAULT"
+            
+            # مرحلة الإحماء الموسعة: 01:40 - 01:59:44
+            elif now.hour == 1 and now.minute >= 40:
+                return "WARMUP"
+            
+            # المسح العادي
+            return "SCOUT"
+            
+        except Exception as e:
+            logger.error(f"❌ خطأ في تحديد النمط: {e}")
+            return "SCOUT"
+    
+    def calculate_delay(self) -> float:
+        """حساب التأخير المناسب"""
+        mode = self.get_operational_mode()
+        
+        if mode == "ASSAULT":
+            self.stats['fast_mode_activations'] += 1
+            return random.uniform(0.01, 0.08)  # 10-80ms فائق السرعة
+        
+        elif mode == "WARMUP":
+            return random.uniform(0.5, 1.5)    # 0.5-1.5 ثانية
+        
+        else:  # SCOUT
+            return random.uniform(15.0, 30.0)  # 15-30 ثانية (مختصر)
+    
+    # ==================== إدارة المتصفح ====================
+    def create_stealth_context(self, browser: Browser) -> Tuple[BrowserContext, Page]:
+        """إنشاء سياق متخفي وآمن"""
+        try:
+            # اختيار User-Agent عشوائي
+            self.current_user_agent = random.choice(self.user_agents)
+            
+            context = browser.new_context(
+                user_agent=self.current_user_agent,
+                viewport={
                     "width": 1366 + random.randint(-30, 30),
                     "height": 768 + random.randint(-30, 30)
                 },
-                'locale': "en-US",
-                'timezone_id': "Asia/Aden",
-                'java_script_enabled': True,
-                'ignore_https_errors': True,
-            }
-            
-            # إعدادات إضافية لـ Railway
-            if self.is_railway:
-                context_args.update({
-                    'bypass_csp': True,
-                    'accept_downloads': False,
-                    'has_touch': False,
-                    'is_mobile': False,
-                    'device_scale_factor': 1,
-                })
-            
-            context = browser.new_context(**context_args)
+                locale="en-US",
+                timezone_id="Asia/Aden",
+                java_script_enabled=True,
+                ignore_https_errors=True,
+                permissions=[]  # لا أذونات
+            )
             
             page = context.new_page()
             
-            # scripts إخفاء متقدمة لـ Railway
+            # منع اكتشاف الأتمتة المتقدم
             stealth_script = """
-            // إخفاء WebDriver
+            // إخفاء WebDriver تماماً
             Object.defineProperty(navigator, 'webdriver', { 
                 get: () => undefined,
                 configurable: true
             });
             
-            // تعديل خصائص المتصفح
+            // تعديل الخصائص الأخرى
             Object.defineProperty(navigator, 'plugins', { 
                 get: () => [1, 2, 3, 4, 5],
                 configurable: true
             });
             
             Object.defineProperty(navigator, 'languages', { 
-                get: () => ['en-US', 'en'],
+                get: () => ['en-US', 'en', 'ar-YE'],
                 configurable: true
             });
             
-            // إخفاء Chrome في Railway
-            if (window.chrome) {
-                Object.defineProperty(window, 'chrome', {
-                    get: () => undefined,
-                    configurable: true
-                });
-            }
+            // إخفاء Chrome runtime بشكل كامل
+            window.chrome = {
+                runtime: {},
+                loadTimes: function() {},
+                csi: function() {},
+                app: {}
+            };
             
-            // إخفاء علامات الأتمتة
-            Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-            
-            // منع اكتشاف Playwright
-            window.__playwright = undefined;
-            window.playwright = undefined;
-            
-            // إخفاء الـ permissions
+            // تعديل permissions بشكل متقدم
             const originalQuery = window.navigator.permissions.query;
             window.navigator.permissions.query = (parameters) => (
                 parameters.name === 'notifications' ?
                     Promise.resolve({ state: Notification.permission }) :
                     originalQuery(parameters)
             );
+            
+            // إخفاء طابع الزمن
+            Object.defineProperty(document, 'hidden', { get: () => false });
+            Object.defineProperty(document, 'visibilityState', { get: () => 'visible' });
+            
+            // إخفاء صوتيات الأتمتة
+            Object.defineProperty(HTMLMediaElement.prototype, 'play', {
+                value: function() { return Promise.resolve(); }
+            });
             """
             
             page.add_init_script(stealth_script)
             
-            # معالجة الطلبات لـ Railway
-            def railway_route_handler(route):
-                request = route.request
-                url = request.url
-                resource_type = request.resource_type
+            # تحسين الأداء بحظر الموارد غير الضرورية
+            def route_handler(route):
+                resource_type = route.request.resource_type
+                url = route.request.url
                 
-                # حظر الموارد غير الضرورية في Railway
-                blocked_resources = ["image", "media", "font"]
-                
-                # في Railway، نحتاج للسماح بـ CSS والخطوط لمنع المشاكل
-                if resource_type in blocked_resources:
-                    if any(ext in url for ext in ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.ico', '.mp4', '.webm']):
+                # حظر أكثر عدوانية في وضع ASSAULT
+                if self.get_operational_mode() == "ASSAULT":
+                    if resource_type in ["image", "media", "font", "stylesheet"]:
                         route.abort()
                         return
                 
-                # السماح بجميع الطلبات الأخرى
-                route.continue_()
+                # الحظر العادي
+                if resource_type in ["image", "media"]:
+                    route.abort()
+                elif "google-analytics" in url or "gtag" in url:
+                    route.abort()
+                else:
+                    route.continue_()
             
-            page.route("**/*", railway_route_handler)
+            page.route("**/*", route_handler)
             
-            # مهلات Railway المطوّلة
-            context.set_default_timeout(self.timeout_settings['default'])
-            context.set_default_navigation_timeout(self.timeout_settings['navigation'])
+            # مهلات ذكية حسب النمط
+            mode = self.get_operational_mode()
+            if mode == "ASSAULT":
+                context.set_default_timeout(8000)    # 8 ثواني
+                context.set_default_navigation_timeout(10000)  # 10 ثواني
+            else:
+                context.set_default_timeout(15000)   # 15 ثانية
+                context.set_default_navigation_timeout(20000)  # 20 ثانية
             
-            logger.info(f"✨ سياق Railway جاهز | المهلات: {self.timeout_settings}")
+            logger.info(f"✨ السياق الجديد جاهز (UA: {self.current_user_agent[:40]}...)")
             return context, page
             
         except Exception as e:
-            logger.error(f"❌ فشل إنشاء سياق Railway: {e}")
+            logger.error(f"❌ فشل إنشاء السياق: {e}")
             raise
     
-    # ==================== نظام المسح المُحسّن ====================
-    def smart_page_goto(self, page: Page, url: str, description: str = "الصفحة") -> bool:
+    # ==================== نظام الحقن المباشر ====================
+    def dom_fill(self, page: Page, selector: str, value: str, field_type: str = "") -> bool:
         """
-        تنقل ذكي مع معالجة مهلات Railway
-        """
-        max_retries = 2
-        base_timeout = self.timeout_settings['loading']
+        حقن مباشر للقيمة في عنصر DOM (أسرع بـ 100x من page.fill)
         
-        for retry in range(max_retries):
-            try:
-                # زيادة المهلة في Railway
-                timeout_multiplier = 1.5 if self.is_railway else 1.0
-                current_timeout = int(base_timeout * timeout_multiplier * (retry + 1))
-                
-                logger.info(f"🌐 {description} | محاولة {retry+1}/{max_retries} | مهلة: {current_timeout}ms")
-                
-                # استخدام wait_until مختلفة بناءً على المحاولة
-                wait_until = "domcontentloaded" if retry == 0 else "load"
-                
-                # إضافة headers لتحسين الأداء في Railway
-                extra_headers = {}
-                if self.is_railway:
-                    extra_headers = {
-                        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-                        'Accept-Language': 'en-US,en;q=0.9',
-                        'Accept-Encoding': 'gzip, deflate, br',
-                        'Cache-Control': 'no-cache',
-                        'Connection': 'keep-alive',
-                        'Upgrade-Insecure-Requests': '1',
-                    }
-                
-                response = page.goto(
-                    url,
-                    timeout=current_timeout,
-                    wait_until=wait_until,
-                    referer=self.base_url if 'diplo' in url else None
-                )
-                
-                if response and response.status >= 400:
-                    logger.warning(f"⚠️ {description} | حالة HTTP: {response.status}")
-                    if retry < max_retries - 1:
-                        page.wait_for_timeout(2000 * (retry + 1))
-                        continue
-                    else:
-                        return False
-                
-                # الانتظار الإضافي للاستقرار في Railway
-                if self.is_railway:
-                    page.wait_for_timeout(1500)
-                
-                logger.info(f"✅ {description} | تحميل ناجح")
-                return True
-                
-            except Exception as e:
-                error_msg = str(e)
-                if "timeout" in error_msg.lower():
-                    self.stats['timeouts'] += 1
-                    logger.warning(f"⏰ {description} | مهلة في المحاولة {retry+1}")
+        Args:
+            page: صفحة Playwright
+            selector: محدد CSS
+            value: القيمة للحقن
+            field_type: نوع الحقل (للتسجيل)
+            
+        Returns:
+            bool: نجاح العملية
+        """
+        start_time = time.time()
+        
+        try:
+            # تنظيف القيمة لحقن آمن في JavaScript
+            safe_value = str(value)
+            replacements = {
+                '\\': '\\\\',
+                '"': '\\"',
+                "'": "\\'",
+                '\n': '\\n',
+                '\r': '\\r',
+                '\t': '\\t'
+            }
+            
+            for old, new in replacements.items():
+                safe_value = safe_value.replace(old, new)
+            
+            # حقن JavaScript مباشر
+            js_code = f"""
+            (function() {{
+                try {{
+                    // البحث عن العنصر
+                    const el = document.querySelector(`{selector}`);
+                    if (!el) {{
+                        return {{success: false, reason: "Element not found: {selector[:30]}"}};
+                    }}
                     
-                    if retry < max_retries - 1:
-                        # استراتيجيات التعافي
-                        recovery_strategies = [
-                            lambda: page.wait_for_timeout(3000),
-                            lambda: page.reload() if page.url == url else None,
-                            lambda: page.evaluate("location.reload()") if page.url == url else None
-                        ]
-                        
-                        if retry < len(recovery_strategies):
-                            try:
-                                recovery_strategies[retry]()
-                            except:
-                                pass
-                        
-                        logger.info(f"🔄 {description} | إعادة المحاولة بعد {3000 * (retry + 1)}ms")
-                        page.wait_for_timeout(3000 * (retry + 1))
-                        continue
-                else:
-                    logger.error(f"❌ {description} | خطأ: {error_msg[:100]}")
+                    // حفظ الحالة الأصلية
+                    const oldValue = el.value;
+                    
+                    // تعيين القيمة الجديدة
+                    el.value = "{safe_value}";
+                    
+                    // تشغيل سلسلة أحداث محاكاة للواقع
+                    el.dispatchEvent(new FocusEvent('focus', {{ bubbles: true }}));
+                    
+                    // محاكاة الكتابة التدريجية للكابتشا فقط
+                    if (el.name === 'captchaText' || el.id.includes('captcha')) {{
+                        // للكابتشا، محاكاة كتابة أبطأ
+                        setTimeout(() => {{
+                            el.dispatchEvent(new InputEvent('input', {{
+                                bubbles: true,
+                                inputType: 'insertText',
+                                data: "{safe_value}"
+                            }}));
+                        }}, 50);
+                    }} else {{
+                        // للحقول العادية، إدخال فوري
+                        el.dispatchEvent(new InputEvent('input', {{
+                            bubbles: true,
+                            inputType: 'insertText',
+                            data: "{safe_value}"
+                        }}));
+                    }}
+                    
+                    el.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                    el.dispatchEvent(new Event('blur', {{ bubbles: true }}));
+                    
+                    // التحقق من نجاح التعيين
+                    const success = el.value === "{safe_value}";
+                    
+                    return {{
+                        success: success,
+                        oldValue: oldValue,
+                        newValue: el.value,
+                        selector: "{selector[:50]}"
+                    }};
+                }} catch(error) {{
+                    return {{success: false, reason: error.message}};
+                }}
+            }})()
+            """
+            
+            result = page.evaluate(js_code)
+            
+            elapsed = (time.time() - start_time) * 1000  # بالمللي ثانية
+            
+            if result.get('success'):
+                self.stats['dom_injections'] += 1
                 
-                if retry == max_retries - 1:
-                    logger.error(f"💀 {description} | فشل بعد {max_retries} محاولات")
-                    return False
-        
-        return False
+                # تحديث متوسط وقت الحقن
+                if self.stats['avg_fill_time_ms'] == 0:
+                    self.stats['avg_fill_time_ms'] = elapsed
+                else:
+                    self.stats['avg_fill_time_ms'] = (self.stats['avg_fill_time_ms'] * 0.9) + (elapsed * 0.1)
+                
+                if field_type:
+                    logger.debug(f"⚡ حقن DOM: {field_type} ({elapsed:.1f}ms)")
+                else:
+                    logger.debug(f"⚡ حقن DOM ناجح ({elapsed:.1f}ms)")
+                return True
+            else:
+                logger.warning(f"⚠️ فشل الحقن: {result.get('reason', 'Unknown')}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"❌ خطأ في DOM Fill: {str(e)[:100]}")
+            elapsed = (time.time() - start_time) * 1000
+            self.stats['errors'] += 1
+            return False
     
-    # ==================== نظام الكابتشا المُحسّن ====================
-    def solve_captcha_railway(self, page: Page, location: str = "GENERAL") -> bool:
+    def safe_fill(self, page: Page, selector: str, value: str, field_type: str = "") -> bool:
         """
-        حل كابتشا مُحسّن لـ Railway
+        تعبئة ذكية مع Fallback تلقائي
         """
-        max_attempts = 3
+        # المحاولة 1: الحقن المباشر (الأسرع)
+        if self.dom_fill(page, selector, value, field_type):
+            return True
+        
+        # المحاولة 2: page.fill العادية (أبطأ)
+        try:
+            start_time = time.time()
+            page.fill(selector, value)
+            elapsed = (time.time() - start_time) * 1000
+            
+            self.stats['page_fills'] += 1
+            logger.debug(f"📝 Fallback fill: {field_type} ({elapsed:.1f}ms)")
+            return True
+            
+        except Exception as e:
+            logger.error(f"❌ فشل Fallback fill: {e}")
+            return False
+    
+    # ==================== نظام الكابتشا فائق السرعة ====================
+    def solve_captcha_ultrafast(self, page: Page, location: str = "GENERAL") -> bool:
+        """
+        حل كابتشا فائق السرعة مع الحقن المباشر
+        """
+        max_attempts = 2  # محاولتان فقط للسرعة
         
         for attempt in range(1, max_attempts + 1):
             try:
-                # التحقق من وجود كابتشا مع مهلة Railway
-                captcha_timeout = self.timeout_settings['captcha']
-                if not page.locator("input[name='captchaText']").first.is_visible(timeout=captcha_timeout):
+                # التحقق الفوري من وجود كابتشا
+                try:
+                    captcha_input = page.locator("input[name='captchaText']").first
+                    if not captcha_input.is_visible(timeout=300):  # 300ms فقط
+                        return True
+                except:
                     return True
                 
-                logger.info(f"🧩 [{location}] محاولة كابتشا {attempt}/{max_attempts}")
+                logger.info(f"⚡ [{location}] كابتشا محاولة {attempt}/{max_attempts}")
                 
-                # البحث بطريقة أكثر مرونة في Railway
-                captcha_selectors = [
-                    "captcha > div",
-                    "div.captcha",
-                    ".captcha-image",
+                # البحث السريع عن عنصر الكابتشا
+                captcha_element = None
+                fast_selectors = [
                     "img[src*='captcha']",
-                    "div[class*='captcha']",
-                    "form img",
-                    "img[alt*='captcha']",
-                    "img[alt*='code']"
+                    "div.captcha img",
+                    "#captcha img",
+                    "img.captcha-image",
+                    "div[class*='captcha'] img"
                 ]
                 
-                captcha_element = None
-                for selector in captcha_selectors:
+                for selector in fast_selectors:
                     try:
-                        if page.locator(selector).first.is_visible(timeout=2000):
+                        if page.locator(selector).first.is_visible(timeout=200):
                             captcha_element = page.locator(selector).first
-                            logger.debug(f"🔍 [{location}] وجدت كابتشا بـ: {selector}")
                             break
                     except:
                         continue
-                
-                if not captcha_element:
-                    # محاولة البحث بـ JavaScript
-                    try:
-                        captcha_element = page.evaluate_handle("""
-                            () => {
-                                const images = document.querySelectorAll('img');
-                                for(const img of images) {
-                                    if(img.src.includes('captcha') || img.alt.includes('captcha') || 
-                                       img.src.includes('security') || img.alt.includes('security')) {
-                                        return img;
-                                    }
-                                }
-                                return null;
-                            }
-                        """)
-                    except:
-                        pass
                 
                 if not captcha_element:
                     logger.warning(f"⚠️ [{location}] عنصر الكابتشا غير موجود")
                     self.stats['captchas_failed'] += 1
                     return False
                 
-                # الانتظار لتحميل الصورة في Railway
-                page.wait_for_timeout(500 if self.is_railway else 300)
-                
-                # التقاط لقطة الشاشة مع معالجة أخطاء Railway
+                # التقاط الشاشة والتحقق من الحجم بسرعة
                 try:
                     screenshot = captcha_element.screenshot()
-                    if len(screenshot) < 500:  # صورة صغيرة جداً (تالفة)
-                        logger.warning("⚫ كابتشا تالفة محتملة")
+                    
+                    # فحص سريع للكابتشا السوداء (The 4333 Reaction)
+                    if len(screenshot) < 1500:  # أقل من 1.5KB يعني صورة تالفة
+                        logger.critical(f"⚫ [{location}] الكابتشا السوداء! (Poisoned Session)")
                         
-                        # محاولة تحديث الكابتشا في Railway
-                        refresh_selectors = [
-                            "input[name*='refresh']",
-                            "button:has-text('Refresh')",
-                            "a:has-text('New')",
-                            "img[src*='refresh']"
-                        ]
+                        self.stats['poisoned_sessions'] += 1
+                        self.is_poisoned = True
                         
-                        for selector in refresh_selectors:
-                            try:
-                                if page.locator(selector).first.is_visible(timeout=1000):
-                                    page.locator(selector).first.click()
-                                    page.wait_for_timeout(1500)
-                                    logger.info("🔄 تحديث الكابتشا")
-                                    break
-                            except:
-                                continue
-                        
-                        page.wait_for_timeout(1000)
-                        continue
+                        # تنفيذ Hard Reset فوري
+                        return self._emergency_session_reboot(page, "BLACK_CAPTCHA")
+                    
                 except Exception as e:
-                    logger.warning(f"⚠️ خطأ في التقاط لقطة الشاشة: {e}")
+                    logger.warning(f"⚠️ خطأ في التقاط الكابتشا: {e}")
                     continue
                 
                 # حل الكابتشا
                 try:
+                    start_solve = time.time()
                     code = self.solver.solve(captcha_element.screenshot())
+                    solve_time = (time.time() - start_solve) * 1000
+                    
                     if not code:
-                        logger.warning("⚠️ فشل حل الكابتشا")
+                        logger.warning(f"⚠️ [{location}] محلول الكابتشا لم يرجع كوداً")
                         continue
                     
                     # تنظيف الكود
-                    code = str(code).replace(" ", "").strip().upper()[:8]
+                    code = str(code).replace(" ", "").replace("-", "").strip()[:10]
                     
                     if len(code) < 4:
                         logger.warning(f"⚠️ كود قصير جداً: {len(code)} أحرف")
                         continue
                     
-                    # إدخال الكود بطريقة أكثر مرونة
-                    try:
-                        page.fill("input[name='captchaText']", code)
-                    except:
-                        # محاولة بديلة
-                        page.evaluate(f"""
-                            (code) => {{
-                                const input = document.querySelector("input[name='captchaText']");
-                                if(input) {{
-                                    input.value = code;
-                                    input.dispatchEvent(new Event('input', {{bubbles: true}}));
-                                }}
-                            }}
-                        """, code)
+                    logger.debug(f"🔢 كود الكابتشا: {code} (حل في {solve_time:.0f}ms)")
                     
-                    # إرسال النموذج
-                    submit_strategies = [
-                        lambda: page.keyboard.press("Enter"),
-                        lambda: page.locator("input[type='submit']").first.click(),
-                        lambda: page.locator("button[type='submit']").first.click(),
-                        lambda: page.evaluate("document.querySelector('form').submit()")
-                    ]
-                    
-                    submitted = False
-                    for strategy in submit_strategies:
-                        try:
-                            strategy()
-                            submitted = True
-                            break
-                        except:
-                            continue
-                    
-                    if not submitted:
-                        page.keyboard.press("Enter")
-                    
-                    # الانتظار للنتيجة مع مهلة Railway
-                    wait_time = 3000 if self.is_railway else 2000
-                    page.wait_for_timeout(wait_time)
-                    
-                    # التحقق من النجاح
-                    if not page.locator("input[name='captchaText']").first.is_visible(timeout=2000):
-                        self.stats['captchas_solved'] += 1
-                        logger.info(f"✅ [{location}] كابتشا محلولة بنجاح")
-                        return True
-                    else:
-                        logger.warning(f"⚠️ [{location}] الكابتشا مازالت موجودة")
-                        page.wait_for_timeout(1500)
-                        continue
+                    # حقن مباشر فائق السرعة للكود
+                    if self.dom_fill(page, "input[name='captchaText']", code, "CAPTCHA"):
                         
+                        # إرسال فوري بـ Enter (أسرع من النقر)
+                        page.keyboard.press("Enter")
+                        
+                        # انتظار قصير جداً حسب النمط
+                        mode = self.get_operational_mode()
+                        wait_time = 500 if mode == "ASSAULT" else 1000  # 0.5-1 ثانية
+                        page.wait_for_timeout(wait_time)
+                        
+                        # التحقق الفوري من النجاح
+                        if not captcha_input.is_visible(timeout=300):
+                            self.stats['captchas_solved'] += 1
+                            logger.info(f"✅ [{location}] كابتشا محلولة (حقن مباشر)")
+                            return True
+                        else:
+                            logger.warning(f"🔄 [{location}] الكابتشا مازالت موجودة")
+                            page.wait_for_timeout(500)
+                            continue
+                            
                 except Exception as e:
-                    logger.error(f"❌ [{location}] خطأ في حل الكابتشا: {str(e)[:100]}")
+                    logger.error(f"❌ [{location}] خطأ في حل الكابتشا: {str(e)[:80]}")
                     continue
                     
             except Exception as e:
-                logger.error(f"❌ [{location}] خطأ عام في الكابتشا: {str(e)[:100]}")
+                logger.error(f"❌ [{location}] خطأ عام في الكابتشا: {str(e)[:80]}")
                 self.stats['errors'] += 1
         
         self.stats['captchas_failed'] += 1
         logger.error(f"❌ [{location}] فشل بعد {max_attempts} محاولات")
         return False
     
-    # ==================== نظام المسح الرئيسي ====================
-    def scan_month_for_days_railway(self, page: Page, url: str) -> Tuple[bool, List[str]]:
-        """مسح الشهر مُحسّن لـ Railway"""
+    def _emergency_session_reboot(self, page: Page, reason: str) -> bool:
+        """
+        إعادة تشغيل طارئة للجلسة (Hard Reset)
+        """
         try:
-            self.stats['scans'] += 1
+            logger.critical(f"🚨 إعادة تشغيل طارئة للجلسة: {reason}")
             
-            logger.info(f"🔍 مسح: {url.split('dateStr=')[-1] if 'dateStr=' in url else url}")
+            # إغلاق السياق الحالي
+            if hasattr(self, 'context') and self.context:
+                try:
+                    self.context.close()
+                except:
+                    pass
             
-            # تحميل الصفحة بطريقة Railway
-            if not self.smart_page_goto(page, url, f"شهر {url.split('dateStr=')[-1] if 'dateStr=' in url else 'غير معروف'}"):
-                self.stats['errors'] += 1
-                self.consecutive_errors += 1
-                return False, []
-            
-            # حل كابتشا الشهر
-            if not self.solve_captcha_railway(page, "MONTH"):
-                self.stats['errors'] += 1
-                return False, []
-            
-            # البحث عن الأيام بطرق متعددة
-            day_links = []
-            
-            # استراتيجيات البحث المختلفة
-            search_strategies = [
-                # الاستراتيجية 1: البحث بـ CSS Selectors
-                lambda: page.locator("a.arrow[href*='appointment_showDay']").all(),
-                # الاستراتيجية 2: البحث بـ JavaScript
-                lambda: page.evaluate("""
-                    () => {
-                        const links = [];
-                        const allLinks = document.querySelectorAll('a');
-                        for(const link of allLinks) {
-                            if(link.href && link.href.includes('showDay')) {
-                                links.push(link);
-                            }
-                        }
-                        return links;
-                    }
-                """),
-                # الاستراتيجية 3: البحث بالنص
-                lambda: page.locator("a:has-text('Book'), a:has-text('Appointment'), a:has-text('Termin')").all(),
+            # تغيير User-Agent جذري
+            new_ua_pool = [
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:126.0) Gecko/20100101 Firefox/126.0",
+                "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
             ]
             
-            for strategy in search_strategies:
-                try:
-                    result = strategy()
-                    if result and len(result) > 0:
-                        if isinstance(result, list):
-                            for element in result[:5]:  # أخذ أول 5 عناصر فقط
-                                try:
-                                    if hasattr(element, 'get_attribute'):
-                                        href = element.get_attribute("href")
-                                    else:
-                                        href = element.get('href') if isinstance(element, dict) else None
-                                    
-                                    if href:
-                                        # بناء URL كامل
-                                        if href.startswith("http"):
-                                            full_url = href
-                                        elif href.startswith("/"):
-                                            full_url = f"https://service2.diplo.de{href}"
-                                        elif href.startswith("appointment_"):
-                                            base = self.base_url.split("/extern")[0]
-                                            full_url = f"{base}/extern/{href}"
-                                        else:
-                                            continue
-                                        
-                                        day_links.append(full_url)
-                                except:
-                                    continue
-                        
-                        if day_links:
-                            break
-                except Exception as e:
-                    logger.debug(f"⚠️ استراتيجية بحث فشلت: {e}")
-                    continue
+            self.current_user_agent = random.choice(new_ua_pool)
+            self.user_agents = [self.current_user_agent]  # تحديث المخزن
             
-            if day_links:
-                logger.info(f"🔥 وجدت {len(day_links)} يوم/أيام")
-                return True, list(set(day_links))[:3]  # إزالة التكرارات وأخذ أول 3
+            # إعادة تعيين الحالة
+            self.consecutive_errors = 0
+            self.is_poisoned = False
             
-            logger.info("📭 لا توجد أيام متاحة")
-            return True, []
+            # إعادة مزامنة الوقت
+            self._sync_ntp_time()
+            
+            logger.info(f"🔄 الجلسة الجديدة جاهزة (UA: {self.current_user_agent[:40]}...)")
+            return False  # لإعادة إنشاء السياق في الدورة الرئيسية
             
         except Exception as e:
-            error_msg = str(e)
-            if "timeout" in error_msg.lower():
-                self.stats['timeouts'] += 1
-                logger.error(f"⏰ مهلة في مسح الشهر")
-            else:
-                logger.error(f"❌ خطأ في مسح الشهر: {error_msg[:100]}")
-            
-            self.stats['errors'] += 1
-            self.consecutive_errors += 1
-            return False, []
+            logger.error(f"❌ فشل إعادة تشغيل الجلسة: {e}")
+            return False
     
-    # ==================== توليد روابط الأشهر ====================
-    def generate_priority_month_urls(self) -> List[str]:
-        """إنشاء روابط الأشهر"""
+    # ==================== نظام التعيين الديناميكي السريع ====================
+    def build_dynamic_field_map_fast(self, page: Page) -> List[FieldMapping]:
+        """
+        بناء خريطة الحقول الديناميكية بسرعة
+        """
+        field_mappings = [
+            FieldMapping(
+                "LAST_NAME",
+                ["last name", "family name", "surname", "nachname", "الاسم الأخير", "اسم العائلة"],
+                Config.LAST_NAME
+            ),
+            FieldMapping(
+                "FIRST_NAME", 
+                ["first name", "given name", "vorname", "الاسم الأول", "الاسم الشخصي"],
+                Config.FIRST_NAME
+            ),
+            FieldMapping(
+                "EMAIL",
+                ["email", "e-mail", "mail address", "البريد الإلكتروني", "البريد الالكتروني"],
+                Config.EMAIL
+            ),
+            FieldMapping(
+                "PASSPORT",
+                ["passport", "passport number", "reisepass", "رقم الجواز", "وثيقة سفر", "جواز سفر"],
+                Config.PASSPORT
+            ),
+            FieldMapping(
+                "PHONE",
+                ["phone", "telephone", "mobile", "contact number", "رقم الهاتف", "رقم الجوال"],
+                Config.PHONE.replace("+", "00").strip()
+            )
+        ]
+        
         try:
-            today = datetime.datetime.now(self.timezone).date()
+            # البحث السريع باستخدام JavaScript
+            labels_info = page.evaluate("""
+                () => {
+                    const results = [];
+                    const labels = document.querySelectorAll('label, span, div, p, td, th');
+                    
+                    for(const label of labels) {
+                        const text = (label.textContent || label.innerText || "").trim().toLowerCase();
+                        
+                        if(text && text.length < 80 && text.length > 1) {
+                            let associatedInput = null;
+                            
+                            // طريقة 1: for attribute
+                            if(label.htmlFor) {
+                                associatedInput = document.getElementById(label.htmlFor);
+                            }
+                            
+                            // طريقة 2: العنصر التالي مباشرة
+                            if(!associatedInput) {
+                                let next = label.nextElementSibling;
+                                while(next && !associatedInput) {
+                                    if(next.matches('input, select, textarea')) {
+                                        associatedInput = next;
+                                    }
+                                    next = next.nextElementSibling;
+                                }
+                            }
+                            
+                            // طريقة 3: البحث في الاب
+                            if(!associatedInput) {
+                                associatedInput = label.querySelector('input, select, textarea');
+                            }
+                            
+                            if(associatedInput) {
+                                results.push({
+                                    text: text,
+                                    inputName: associatedInput.name || '',
+                                    inputId: associatedInput.id || '',
+                                    tagName: associatedInput.tagName,
+                                    type: associatedInput.type || 'text'
+                                });
+                            }
+                        }
+                    }
+                    
+                    return results.slice(0, 30); // أول 30 فقط للسرعة
+                }
+            """)
+            
+            # تعيين سريع
+            for mapping in field_mappings:
+                for label in labels_info:
+                    for pattern in mapping.patterns:
+                        if pattern in label['text']:
+                            if label['inputName']:
+                                mapping.found_name = label['inputName']
+                                mapping.found_selector = f"input[name='{label['inputName']}']"
+                            elif label['inputId']:
+                                mapping.found_selector = f"#{label['inputId']}"
+                            
+                            if mapping.found_selector:
+                                logger.debug(f"🔗 عُيّن: {mapping.field_type} -> {mapping.found_selector}")
+                            break
+                    
+                    if mapping.found_selector:
+                        break
+            
+            return field_mappings
+            
+        except Exception as e:
+            logger.error(f"❌ خطأ في بناء خريطة الحقول السريعة: {e}")
+            return field_mappings
+    
+    def fill_form_ultrafast(self, page: Page, field_mappings: List[FieldMapping]) -> bool:
+        """
+        تعبئة فائقة السرعة للنموذج
+        """
+        start_time = time.time()
+        
+        try:
+            success_count = 0
+            total_fields = len(field_mappings)
+            
+            # تجميع عمليات الحقن دفعة واحدة إن أمكن
+            for mapping in field_mappings:
+                filled = False
+                
+                # المحاولة 1: التعيين الديناميكي
+                if mapping.found_selector:
+                    if self.safe_fill(page, mapping.found_selector, mapping.value, mapping.field_type):
+                        filled = True
+                
+                # المحاولة 2: الأسماء الثابتة
+                if not filled:
+                    fallback_selectors = {
+                        "LAST_NAME": [
+                            "input[name='lastname']", 
+                            "input[name='familyName']",
+                            "#lastname",
+                            "input[name='fields[3].content']"
+                        ],
+                        "FIRST_NAME": [
+                            "input[name='firstname']", 
+                            "input[name='givenName']",
+                            "#firstname",
+                            "input[name='fields[2].content']"
+                        ],
+                        "EMAIL": [
+                            "input[name='email']", 
+                            "input[name='eMail']",
+                            "#email",
+                            "input[name='fields[4].content']"
+                        ],
+                        "PASSPORT": [
+                            "input[name='passportNumber']", 
+                            "input[name='fields[0].content']",
+                            "#passportNumber",
+                            "input[name='passport']"
+                        ],
+                        "PHONE": [
+                            "input[name='phone']", 
+                            "input[name='fields[1].content']",
+                            "#phone",
+                            "input[name='telephone']"
+                        ]
+                    }
+                    
+                    for selector in fallback_selectors.get(mapping.field_type, []):
+                        if self.safe_fill(page, selector, mapping.value, mapping.field_type):
+                            filled = True
+                            break
+                
+                if filled:
+                    success_count += 1
+                else:
+                    logger.warning(f"⚠️ فشل ملء حقل: {mapping.field_type}")
+                    # محاولة طوارئ باستخدام JavaScript المباشر
+                    try:
+                        page.evaluate(f"""
+                            const inputs = document.querySelectorAll('input');
+                            for(const input of inputs) {{
+                                const placeholder = (input.placeholder || '').toLowerCase();
+                                const name = (input.name || '').toLowerCase();
+                                if(placeholder.includes('{mapping.field_type.lower().replace('_', ' ')}') || 
+                                   name.includes('{mapping.field_type.lower().replace('_', ' ')}')) {{
+                                    input.value = '{mapping.value}';
+                                    success_count += 1;
+                                    break;
+                                }}
+                            }}
+                        """)
+                    except:
+                        pass
+            
+            # اختيار فئة التأشيرة بسرعة
+            if self._select_visa_category_ultrafast(page):
+                success_count += 1
+            
+            # حقل تكرار الإيميل
+            if self._fill_email_repeat_fast(page, Config.EMAIL):
+                success_count += 1
+            
+            fill_time = (time.time() - start_time) * 1000
+            self.stats['forms_filled'] += 1
+            
+            logger.info(f"⚡ تم تعبئة {success_count}/{total_fields + 2} حقول في {fill_time:.0f}ms")
+            
+            return success_count >= total_fields  # نجاح إذا عُبئت معظم الحقول
+            
+        except Exception as e:
+            logger.error(f"❌ خطأ في التعبئة الفائقة: {e}")
+            return False
+    
+    def _fill_email_repeat_fast(self, page: Page, email: str) -> bool:
+        """تعبئة حقل تكرار الإيميل بسرعة"""
+        try:
+            repeat_selectors = [
+                "input[name='emailrepeat']",
+                "input[name='emailRepeat']",
+                "input[name='confirmEmail']",
+                "input[name='email_confirm']",
+                "#emailRepeat",
+                "#confirmEmail"
+            ]
+            
+            for selector in repeat_selectors:
+                try:
+                    if page.locator(selector).first.is_visible(timeout=200):
+                        return self.dom_fill(page, selector, email, "EMAIL_REPEAT")
+                except:
+                    continue
+            
+            return False
+        except:
+            return False
+    
+    def _select_visa_category_ultrafast(self, page: Page) -> bool:
+        """
+        اختيار فائق السرعة لفئة التأشيرة
+        """
+        try:
+            # البحث السريع عن عنصر select
+            select_js = """
+            () => {
+                const selects = document.querySelectorAll('select');
+                for(const select of selects) {
+                    const name = (select.name || '').toLowerCase();
+                    const id = (select.id || '').toLowerCase();
+                    const options = select.querySelectorAll('option');
+                    
+                    if(options.length > 1 && 
+                       (name.includes('visa') || name.includes('category') || 
+                        name.includes('purpose') || id.includes('visa') ||
+                        select.name === 'fields[2].content')) {
+                        return {
+                            element: select,
+                            name: select.name,
+                            id: select.id,
+                            optionsCount: options.length
+                        };
+                    }
+                }
+                return null;
+            }
+            """
+            
+            select_info = page.evaluate(select_js)
+            
+            if not select_info:
+                logger.warning("⚠️ لم يتم العثور على عنصر select للفيزا")
+                return False
+            
+            # كلمات V1 المفتاحية بالترتيب
+            v1_keywords = [
+                "yemeni national",
+                "student visa", 
+                "language course",
+                "studium",
+                "sprachkurs",
+                "university",
+                "student",
+                "language"
+            ]
+            
+            # البحث عن أفضل خيار
+            best_index = 1  # افتراضي: الخيار الثاني
+            
+            options_js = f"""
+            (selectName) => {{
+                const select = document.querySelector(`select[name="${{selectName}}"]`);
+                if(!select) return {{index: 1, text: ""}};
+                
+                const options = select.querySelectorAll('option');
+                const keywords = {json.dumps(v1_keywords)};
+                
+                for(const keyword of keywords) {{
+                    for(let i = 0; i < options.length; i++) {{
+                        const text = (options[i].textContent || "").toLowerCase();
+                        if(text.includes(keyword)) {{
+                            return {{index: i, text: text}};
+                        }}
+                    }}
+                }}
+                
+                // Fallback للخيار الثاني
+                return {{index: 1, text: options[1]?.textContent || ""}};
+            }}
+            """
+            
+            result = page.evaluate(options_js, select_info['name'])
+            
+            # الاختيار
+            select_selector = f"select[name='{select_info['name']}']"
+            page.select_option(select_selector, index=result['index'])
+            
+            logger.info(f"📋 اختيار الفئة: الخيار {result['index'] + 1} ({result['text'][:30]}...)")
+            return True
+            
+        except Exception as e:
+            logger.error(f"❌ خطأ في اختيار الفئة السريع: {e}")
+            return False
+    
+    # ==================== بناء الروابط الآمن ====================
+    def safe_url_join(self, base: str, href: str) -> str:
+        """
+        بناء رابط آمن باستخدام urljoin
+        """
+        try:
+            if not href or href == "#" or href.startswith("javascript:"):
+                return base
+            
+            # إذا كان الرابط كامل
+            if href.startswith(("http://", "https://")):
+                return href
+            
+            # استخدام urljoin للبناء الآمن
+            joined = urljoin(base, href)
+            
+            # تنظيف الروابط المزدوجة
+            parsed = urlparse(joined)
+            path = parsed.path.replace("//", "/")
+            
+            # إعادة بناء الرابط
+            result = f"{parsed.scheme}://{parsed.netloc}{path}"
+            if parsed.query:
+                result += f"?{parsed.query}"
+            if parsed.fragment:
+                result += f"#{parsed.fragment}"
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"❌ خطأ في بناء الرابط: {e}")
+            
+            # Fallback ذكي
+            if href.startswith("/"):
+                return f"https://service2.diplo.de{href}"
+            elif href.startswith("./"):
+                return f"{base.rsplit('/', 1)[0]}/{href[2:]}"
+            else:
+                return f"{base.rstrip('/')}/{href.lstrip('/')}"
+    
+    # ==================== نظام المسح فائق السرعة ====================
+    def generate_priority_month_urls(self) -> List[str]:
+        """إنشاء روابط الأشهر بأولويات استراتيجية"""
+        try:
+            today = self.get_synced_time().astimezone(self.timezone).date()
             base_clean = self.base_url.split("&dateStr=")[0] if "&dateStr=" in self.base_url else self.base_url
             
             urls = []
             
-            # أولويات V4: مارس(3)، أبريل(4)، فبراير(2)، مايو(5)
-            priority_offsets = [2, 3, 1, 4]
+            # أولويات V4 مع تعديلات ذكية
+            month_priorities = [
+                (2, "مارس"),   # الأولوية 1
+                (3, "أبريل"),  # الأولوية 2
+                (1, "فبراير"), # الأولوية 3
+                (4, "مايو"),   # الأولوية 4
+                (5, "يونيو"),  # احتياطي
+                (6, "يوليو")   # احتياطي
+            ]
             
-            for offset in priority_offsets:
+            for offset, month_name in month_priorities:
                 future_month = (today.month + offset - 1) % 12 + 1
                 future_year = today.year + ((today.month + offset - 1) // 12)
                 date_str = f"15.{future_month:02d}.{future_year}"
                 full_url = f"{base_clean}&dateStr={date_str}"
                 urls.append(full_url)
+                
+                # في وضع ASSAULT، نجرب تواريخ متعددة
+                if self.get_operational_mode() == "ASSAULT" and offset <= 3:
+                    # تواريخ إضافية في نفس الشهر
+                    for day in [1, 10, 20]:
+                        date_str_alt = f"{day:02d}.{future_month:02d}.{future_year}"
+                        urls.append(f"{base_clean}&dateStr={date_str_alt}")
             
-            return urls
+            # خلط الروابط لمنع الأنماط
+            if self.get_operational_mode() != "ASSAULT":
+                random.shuffle(urls)
+            
+            logger.debug(f"📅 تم إنشاء {len(urls)} رابط شهر")
+            return urls[:12]  # أخذ أول 12 رابط فقط
             
         except Exception as e:
             logger.error(f"❌ خطأ في إنشاء روابط الأشهر: {e}")
             return []
     
-    # ==================== الدورة الرئيسية المُحسّنة ====================
-    def run_railway_optimized(self):
-        """الدورة الرئيسية المُحسّنة لـ Railway"""
+    def scan_month_for_days_fast(self, page: Page, url: str) -> Tuple[bool, List[str]]:
+        """مسح سريع للشهر للبحث عن أيام متاحة"""
+        try:
+            self.stats['scans'] += 1
+            
+            # التحميل السريع
+            mode = self.get_operational_mode()
+            timeout = 5000 if mode == "ASSAULT" else 10000
+            
+            logger.debug(f"🔍 مسح سريع: {url.split('dateStr=')[-1] if 'dateStr=' in url else url}")
+            
+            page.goto(url, timeout=timeout, wait_until="domcontentloaded")
+            
+            # حل كابتشا سريع
+            if not self.solve_captcha_ultrafast(page, "MONTH"):
+                return False, []
+            
+            # البحث السريع عن الأيام باستخدام JavaScript
+            day_links = []
+            
+            try:
+                # طريقة JavaScript فائقة السرعة
+                links = page.evaluate("""
+                    () => {
+                        const results = [];
+                        // جميع الأنماط المحتملة
+                        const selectors = [
+                            'a[href*="showDay"]',
+                            'a.arrow[href*="appointment"]',
+                            'td.buchbar a',
+                            'td.free a',
+                            'a.appointment',
+                            'a:has-text("Book")',
+                            'a:has-text("Appointment")',
+                            'a:has-text("Termin")'
+                        ];
+                        
+                        for(const selector of selectors) {
+                            const elements = document.querySelectorAll(selector);
+                            for(const el of elements) {
+                                const href = el.getAttribute('href');
+                                if(href && href.includes('showDay')) {
+                                    results.push({
+                                        href: href,
+                                        text: el.textContent?.trim() || ''
+                                    });
+                                }
+                            }
+                            if(results.length >= 3) break; // أول 3 فقط
+                        }
+                        
+                        return results.slice(0, 3);
+                    }
+                """)
+                
+                for link_info in links:
+                    full_url = self.safe_url_join(url, link_info['href'])
+                    if full_url not in day_links:
+                        day_links.append(full_url)
+                
+            except Exception as e:
+                logger.warning(f"⚠️ خطأ في البحث السريع: {e}")
+                # Fallback للطريقة الأصلية
+                pass
+            
+            if day_links:
+                logger.info(f"🔥 وجدت {len(day_links)} يوم/أيام")
+                return True, day_links
+            
+            logger.debug("📭 لا توجد أيام متاحة")
+            return True, []
+            
+        except Exception as e:
+            logger.error(f"❌ خطأ في مسح الشهر السريع: {str(e)[:100]}")
+            self.stats['errors'] += 1
+            return False, []
+    
+    def scan_day_for_slots_fast(self, page: Page, day_url: str) -> Tuple[bool, List[str]]:
+        """مسح سريع لليوم للبحث عن مواعيد"""
+        try:
+            # الانتقال السريع لليوم
+            page.goto(day_url, timeout=8000, wait_until="domcontentloaded")
+            
+            # حل كابتشا سريع
+            if not self.solve_captcha_ultrafast(page, "DAY"):
+                return False, []
+            
+            # البحث السريع عن المواعيد
+            slot_links = []
+            
+            try:
+                # طريقة JavaScript فائقة السرعة
+                slots = page.evaluate("""
+                    () => {
+                        const results = [];
+                        const selectors = [
+                            'a[href*="showForm"]',
+                            'a.arrow[href*="appointment_showForm"]',
+                            'td a:has-text("Select")',
+                            'td a:has-text("Book")',
+                            'a:has-text("Time")',
+                            'a:has-text("Zeit")',
+                            'button[onclick*="showForm"]'
+                        ];
+                        
+                        for(const selector of selectors) {
+                            const elements = document.querySelectorAll(selector);
+                            for(const el of elements) {
+                                let href = el.getAttribute('href');
+                                if(!href && el.onclick) {
+                                    // استخراج من onclick
+                                    const match = el.onclick.toString().match(/showForm[^']*'([^']+)'/);
+                                    if(match) href = match[1];
+                                }
+                                
+                                if(href && href.includes('showForm')) {
+                                    results.push({
+                                        href: href,
+                                        text: el.textContent?.trim() || '',
+                                        time: el.closest('td')?.textContent?.trim() || ''
+                                    });
+                                }
+                            }
+                            if(results.length >= 2) break; // أول موعدين فقط
+                        }
+                        
+                        return results.slice(0, 2);
+                    }
+                """)
+                
+                for slot_info in slots:
+                    full_url = self.safe_url_join(day_url, slot_info['href'])
+                    if full_url not in slot_links:
+                        slot_links.append(full_url)
+                        logger.debug(f"⏰ موعد: {slot_info['time'][:20]}")
+                
+            except Exception as e:
+                logger.warning(f"⚠️ خطأ في البحث عن المواعيد: {e}")
+            
+            if slot_links:
+                logger.info(f"⏰ وجدت {len(slot_links)} موعد/مواعيد")
+                return True, slot_links
+            
+            logger.debug("⏳ لا توجد مواعيد متاحة")
+            return True, []
+            
+        except Exception as e:
+            logger.error(f"❌ خطأ في مسح اليوم السريع: {e}")
+            return False, []
+    
+    # ==================== محرك الحجز فائق السرعة ====================
+    def attempt_booking_ultrafast(self, page: Page, slot_url: str) -> bool:
+        """محاولة حجز فائقة السرعة"""
+        try:
+            logger.info("🎯 بدء حجز فائق السرعة...")
+            
+            # الانتقال الفوري لصفحة الحجز
+            page.goto(slot_url, timeout=6000, wait_until="domcontentloaded")
+            
+            # حل كابتشا فوري
+            if not self.solve_captcha_ultrafast(page, "FORM"):
+                return False
+            
+            # التحقق السريع من وجود النموذج
+            if not page.locator("form").first.is_visible(timeout=2000):
+                logger.error("❌ النموذج غير موجود")
+                return False
+            
+            # بناء خريطة الحقول الديناميكية بسرعة
+            field_mappings = self.build_dynamic_field_map_fast(page)
+            
+            # تعبئة فائقة السرعة
+            if not self.fill_form_ultrafast(page, field_mappings):
+                logger.error("❌ فشل تعبئة النموذج")
+                return False
+            
+            # الإرسال النهائي فائق السرعة
+            return self._submit_booking_ultrafast(page)
+            
+        except Exception as e:
+            logger.error(f"❌ خطأ في محاولة الحجز الفائق: {e}")
+            return False
+    
+    def _submit_booking_ultrafast(self, page: Page, max_attempts: int = 2) -> bool:
+        """إرسال نموذج الحجز فائق السرعة"""
+        for attempt in range(1, max_attempts + 1):
+            try:
+                logger.info(f"📤 محاولة إرسال فائقة السرعة {attempt}/{max_attempts}")
+                
+                # حل كابتشا الإرسال النهائي
+                if not self.solve_captcha_ultrafast(page, "SUBMIT"):
+                    # تحقق سريع إذا مازال في النموذج
+                    if page.locator("input[name='lastname']").first.is_visible(timeout=500):
+                        continue
+                    else:
+                        return False
+                
+                # البحث الفوري عن زر الإرسال
+                submit_found = False
+                
+                # محاولة باستخدام JavaScript أولاً
+                submit_result = page.evaluate("""
+                    () => {
+                        const submitSelectors = [
+                            'input[type="submit"]',
+                            'button[type="submit"]',
+                            'button:contains("Book")',
+                            'button:contains("Submit")',
+                            'button:contains("Confirm")',
+                            'button:contains("Absenden")',
+                            'button:contains("Buchen")'
+                        ];
+                        
+                        for(const selector of submitSelectors) {
+                            const el = document.querySelector(selector);
+                            if(el && el.offsetParent !== null) {
+                                el.click();
+                                return {success: true, selector: selector};
+                            }
+                        }
+                        return {success: false};
+                    }
+                """)
+                
+                if submit_result.get('success'):
+                    submit_found = True
+                    logger.debug(f"🖱️ نقر بـ JS: {submit_result.get('selector')}")
+                else:
+                    # Fallback للنقر العادي
+                    submit_selectors = [
+                        "input[type='submit']",
+                        "button[type='submit']",
+                        "button:has-text('Book')",
+                        "button:has-text('Submit')",
+                        "button:has-text('Confirm')"
+                    ]
+                    
+                    for selector in submit_selectors:
+                        if page.locator(selector).first.is_visible(timeout=500):
+                            page.locator(selector).first.click()
+                            submit_found = True
+                            break
+                
+                if not submit_found:
+                    # محاولة أخيرة بـ Enter
+                    page.keyboard.press("Enter")
+                    submit_found = True
+                
+                # انتظار قصير جداً
+                mode = self.get_operational_mode()
+                wait_time = 2000 if mode == "ASSAULT" else 3000
+                page.wait_for_timeout(wait_time)
+                
+                # التحقق الفوري من النجاح
+                page_content = page.content().lower()
+                
+                success_indicators = [
+                    "appointment number",
+                    "successfully booked",
+                    "booking confirmed",
+                    "vorgang wurde gespeichert",
+                    "termin wurde gebucht",
+                    "buchung erfolgreich",
+                    "confirmation number"
+                ]
+                
+                for indicator in success_indicators:
+                    if indicator in page_content:
+                        # استخراج سريع لتفاصيل الحجز
+                        appointment_num = re.search(r"appointment number is\s+(\d+)", page_content, re.IGNORECASE)
+                        appointment_date = re.search(r"(\d{2}\.\d{2}\.\d{4})", page_content)
+                        
+                        success_msg = "\n" + "="*60 + "\n"
+                        success_msg += "🎉🎉🎉 الحجز الناجح! 🎉🎉🎉\n"
+                        success_msg += "="*60 + "\n"
+                        if appointment_num:
+                            success_msg += f"📋 رقم الحجز: {appointment_num.group(1)}\n"
+                        if appointment_date:
+                            success_msg += f"📅 التاريخ: {appointment_date.group(1)}\n"
+                        success_msg += f"👤 الاسم: {Config.FIRST_NAME} {Config.LAST_NAME}\n"
+                        success_msg += f"⚡ النمط: {mode}\n"
+                        success_msg += f"⏰ وقت التشغيل: {(datetime.datetime.now() - self.start_time).total_seconds():.0f}s\n"
+                        success_msg += "="*60
+                        
+                        logger.info(success_msg)
+                        
+                        # إرسال الإشعارات السريعة
+                        self._send_success_notifications_fast(page, appointment_num, appointment_date)
+                        
+                        self.stats['success'] = True
+                        return True
+                
+                # تحقق سريع إذا مازال في النموذج
+                if page.locator("input[name='lastname']").first.is_visible(timeout=500):
+                    logger.warning("🔄 مازال في النموذج، إعادة المحاولة...")
+                    page.wait_for_timeout(1000)
+                    continue
+                
+                # إذا ظهر خطأ
+                error_indicators = ["error", "fehler", "خطأ", "invalid", "ungültig", "failed", "failure"]
+                for indicator in error_indicators:
+                    if indicator in page_content:
+                        logger.error("❌ خطأ في الخادم")
+                        return False
+                
+            except Exception as e:
+                logger.error(f"❌ خطأ في الإرسال الفائق: {str(e)[:100]}")
+                if attempt < max_attempts:
+                    page.wait_for_timeout(1500)
+        
+        logger.error(f"❌ فشل بعد {max_attempts} محاولات إرسال")
+        return False
+    
+    def _send_success_notifications_fast(self, page: Page, appointment_num, appointment_date):
+        """إرسال إشعارات النجاح السريعة"""
+        try:
+            # حفظ لقطة الشاشة السريعة
+            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            screenshot_path = f"king_booking_{timestamp}.png"
+            
+            # لقطة سريعة (ليس كاملة الصفحة للسرعة)
+            page.screenshot(path=screenshot_path, full_page=False)
+            
+            # بناء رسالة الإشعار السريعة
+            alert_message = f"""
+✅ الحجز الناجح! (King Sniper v11.0.0)
+
+📋 رقم الحجز: {appointment_num.group(1) if appointment_num else 'غير معروف'}
+📅 التاريخ: {appointment_date.group(1) if appointment_date else 'غير معروف'}
+👤 الاسم: {Config.FIRST_NAME} {Config.LAST_NAME}
+🆔 الجلسة: {self.session_id}
+⚡ النمط: {self.get_operational_mode()}
+⏰ الوقت: {datetime.datetime.now().strftime('%H:%M:%S')}
+📊 الإحصاءات: 
+   • المسوحات: {self.stats['scans']}
+   • الكابتشات: {self.stats['captchas_solved']}/{self.stats['captchas_failed']}
+   • الحقن المباشر: {self.stats['dom_injections']}
+   • متوسط الحقن: {self.stats['avg_fill_time_ms']:.1f}ms
+            """
+            
+            # إرسال الإشعار
+            send_alert(alert_message.strip())
+            
+            # إرسال الصورة
+            photo_caption = f"✅ King Sniper - {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+            send_photo(screenshot_path, caption=photo_caption)
+            
+            # تسجيل النجاح في ملف
+            with open("king_success.log", "a", encoding="utf-8") as f:
+                f.write(f"\n{datetime.datetime.now().isoformat()} - {alert_message}\n")
+            
+        except Exception as e:
+            logger.error(f"⚠️ خطأ في إرسال الإشعارات: {e}")
+    
+    # ==================== الدورة الرئيسية المحسنة ====================
+    def run_king_mode(self):
+        """الدورة الرئيسية للتشغيل فائق السرعة"""
         logger.info("="*60)
-        logger.info("🚀 بدء تشغيل EliteSniper v10.1.0 (Railway Optimized)")
+        logger.info("👑 King Sniper v11.0.0 - بدء التشغيل")
         logger.info("="*60)
         
         try:
-            # إعدادات متقدمة لـ Railway
-            launch_args = {
-                'headless': True,
-                'args': [
-                    "--disable-blink-features=AutomationControlled",
-                    "--no-sandbox",
-                    "--disable-setuid-sandbox",
-                    "--disable-dev-shm-usage",
-                    "--disable-gpu",
-                    "--no-first-run",
-                    "--disable-extensions",
-                    "--disable-web-security",
-                    "--disable-features=IsolateOrigins,site-per-process",
-                    "--window-size=1366,768",
-                    "--start-maximized",
-                ]
-            }
-            
-            # إضافة إعدادات خاصة لـ Railway
-            if self.is_railway:
-                launch_args['args'].extend([
-                    "--single-process",
-                    "--no-zygote",
-                    "--disable-accelerated-2d-canvas",
-                    "--disable-dev-shm-usage",
-                    "--disable-setuid-sandbox",
-                    "--disable-background-timer-throttling",
-                    "--disable-backgrounding-occluded-windows",
-                    "--disable-renderer-backgrounding",
-                ])
-                launch_args['timeout'] = 90000  # 90 ثانية لـ Railway
-            
             with sync_playwright() as p:
-                logger.info("🌐 بدء تشغيل المتصفح...")
+                # إعداد متصفح محسن للسرعة
+                browser = p.chromium.launch(
+                    headless=True,
+                    args=[
+                        "--disable-blink-features=AutomationControlled",
+                        "--no-sandbox",
+                        "--disable-setuid-sandbox",
+                        "--disable-dev-shm-usage",
+                        "--disable-gpu",
+                        "--no-first-run",
+                        "--single-process",  # ⚡ لسرعة أكبر
+                        "--disable-web-security",
+                        "--disable-features=IsolateOrigins,site-per-process,VizDisplayCompositor",
+                        "--disable-accelerated-2d-canvas",
+                        "--disable-background-timer-throttling",
+                        "--disable-backgrounding-occluded-windows",
+                        "--disable-renderer-backgrounding",
+                        "--disable-ipc-flooding-protection",
+                        "--enable-features=NetworkService,NetworkServiceInProcess",
+                        "--disable-dev-shm-usage"
+                    ],
+                    timeout=30000
+                )
                 
-                browser = p.chromium.launch(**launch_args)
-                
-                logger.info("✅ المتصفح جاهز")
-                
-                # إنشاء السياق
-                context, page = self.create_railway_context(browser)
+                # إنشاء السياق الأول
+                self.context, page = self.create_stealth_context(browser)
                 
                 cycle = 0
-                max_cycles_without_success = 50  # زيادة عدد الدورات لـ Railway
+                last_stats_log = time.time()
                 
-                while not self.stats['success'] and cycle < max_cycles_without_success:
+                while not self.stats['success']:
                     cycle += 1
                     
-                    logger.info(f"\n{'='*50}")
-                    logger.info(f"🔁 الدورة #{cycle}")
-                    logger.info(f"📊 النمط: {self.get_operational_mode()}")
-                    logger.info(f"📈 الإحصاءات: Scans={self.stats['scans']}, Errors={self.stats['errors']}, Timeouts={self.stats['timeouts']}")
-                    logger.info(f"{'='*50}")
+                    logger.info(f"\n👑 الدورة #{cycle} - النمط: {self.get_operational_mode()}")
                     
-                    # إعادة التعافي إذا كانت الأخطاء كثيرة
-                    if self.consecutive_errors >= 5:
-                        logger.warning(f"⚠️ أخطاء متتالية: {self.consecutive_errors}")
-                        logger.info("🔄 محاولة التعافي...")
-                        
-                        try:
-                            page.wait_for_timeout(5000)
-                            
-                            # محاولة إعادة تحميل الصفحة الرئيسية
-                            if page.url and 'diplo' in page.url:
-                                page.reload()
-                            else:
-                                page.goto(self.base_url, timeout=30000)
-                            
-                            page.wait_for_timeout(3000)
-                            self.consecutive_errors = 0
-                            logger.info("✅ تمت إعادة التعافي")
-                        except:
-                            logger.warning("⚠️ فشل التعافي، المتابعة...")
+                    # التحقق من حالة النظام
+                    if self.is_poisoned:
+                        logger.critical("💀 جلسة مسمومة - إعادة تشغيل كاملة")
+                        if self._emergency_session_reboot(page, "SESSION_POISONED"):
+                            # إعادة إنشاء السياق
+                            try:
+                                self.context.close()
+                            except:
+                                pass
+                            self.context, page = self.create_stealth_context(browser)
+                        continue
                     
-                    # التأخير بين الدورات
+                    # التأخير الذكي
                     delay = self.calculate_delay()
-                    if delay > 1:
-                        logger.info(f"⏳ تأخير: {delay:.1f} ثانية")
+                    if delay > 0.2:
+                        logger.info(f"⏳ تأخير: {delay:.2f} ثانية")
                         time.sleep(delay)
                     
                     # الحصول على روابط الأشهر
@@ -712,146 +1441,149 @@ class EliteSniper:
                     
                     if not month_urls:
                         logger.error("❌ لا توجد روابط أشهر")
-                        time.sleep(60)
+                        time.sleep(30)
                         continue
                     
-                    logger.info(f"📅 عدد الأشهر للمسح: {len(month_urls)}")
-                    
                     # مسح كل شهر
-                    for month_index, month_url in enumerate(month_urls):
+                    for month_url in month_urls:
                         if self.stats['success']:
                             break
                         
-                        logger.info(f"📊 الشهر {month_index+1}/{len(month_urls)}")
-                        
-                        # مسح الشهر
-                        scan_success, day_urls = self.scan_month_for_days_railway(page, month_url)
+                        # مسح الشهر السريع
+                        scan_success, day_urls = self.scan_month_for_days_fast(page, month_url)
                         
                         if not scan_success:
                             self.consecutive_errors += 1
-                            logger.warning(f"⚠️ فشل مسح الشهر {month_index+1}")
+                            if self.consecutive_errors >= 5:
+                                logger.warning("⚠️ أخطاء متتالية، تجاوز هذا الشهر")
+                                break
                             continue
+                        
+                        self.consecutive_errors = 0
                         
                         if not day_urls:
-                            logger.info(f"📭 الشهر {month_index+1}: لا توجد أيام")
                             continue
                         
-                        logger.info(f"🎯 الشهر {month_index+1}: وجدت {len(day_urls)} يوم/أيام")
-                        
-                        # هنا يمكن إضافة منطق مسح الأيام والمحاولة (مختصر للتركيز على Railway)
-                        # في النسخة الكاملة، سيتم إضافة باقي المنطق هنا
-                        
-                        # مؤقت: فقط لتجربة Railway
-                        logger.info("⏸️ توقف للاختبار (في النسخة الكاملة سيتم متابعة الحجز)")
-                        page.wait_for_timeout(5000)
-                        break  # خروج من الحلقة للاختبار
+                        # مسح كل يوم
+                        for day_url in day_urls:
+                            if self.stats['success']:
+                                break
+                            
+                            # مسح اليوم السريع
+                            day_success, slot_urls = self.scan_day_for_slots_fast(page, day_url)
+                            
+                            if not day_success:
+                                self.consecutive_errors += 1
+                                break
+                            
+                            if not slot_urls:
+                                break
+                            
+                            # محاولة الحجز لكل موعد
+                            for slot_url in slot_urls:
+                                if self.stats['success']:
+                                    break
+                                
+                                logger.info(f"🎯 محاولة حجز فائقة السرعة: {slot_url[-50:]}")
+                                
+                                # محاولة الحجز فائق السرعة
+                                if self.attempt_booking_ultrafast(page, slot_url):
+                                    logger.info("🏆 المهمة مكتملة بنجاح!")
+                                    break
+                                else:
+                                    self.consecutive_errors += 1
+                                    logger.warning("⚠️ فشل الحجز، الانتقال للموعد التالي")
+                                    page.wait_for_timeout(1000)
                     
-                    # إحصاءات نهاية الدورة
-                    logger.info(f"\n📊 إحصاءات الدورة #{cycle}")
-                    logger.info(f"   • المسوحات: {self.stats['scans']}")
-                    logger.info(f"   • المهلات: {self.stats['timeouts']}")
-                    logger.info(f"   • الأخطاء: {self.stats['errors']}")
-                    logger.info(f"   • الأخطاء المتتالية: {self.consecutive_errors}")
-                    logger.info(f"   • وقت التشغيل: {(datetime.datetime.now() - self.start_time).total_seconds():.1f} ثانية")
+                    # عرض إحصاءات الدورة
+                    current_time = time.time()
+                    if current_time - last_stats_log > 60:  # كل دقيقة
+                        logger.info(f"📊 إحصاءات النظام:")
+                        logger.info(f"   • الدورات: {cycle}")
+                        logger.info(f"   • المسوحات: {self.stats['scans']}")
+                        logger.info(f"   • الكابتشات الناجحة: {self.stats['captchas_solved']}")
+                        logger.info(f"   • الكابتشات الفاشلة: {self.stats['captchas_failed']}")
+                        logger.info(f"   • الحقن المباشر: {self.stats['dom_injections']}")
+                        logger.info(f"   • متوسط وقت الحقن: {self.stats['avg_fill_time_ms']:.1f}ms")
+                        logger.info(f"   • الجلسات المسمومة: {self.stats['poisoned_sessions']}")
+                        logger.info(f"   • تصحيحات NTP: {self.stats['ntp_corrections']}")
+                        logger.info(f"   • الأخطاء المتتالية: {self.consecutive_errors}")
+                        last_stats_log = current_time
                     
-                    # إعادة التشغيل إذا استمرت المشاكل
-                    if self.stats['timeouts'] > 10 or self.consecutive_errors > 8:
-                        logger.warning("🔄 مشاكل متكررة، إعادة التشغيل...")
+                    # إعادة تشغيل وقائية كل 15 دقيقة
+                    runtime = datetime.datetime.now() - self.start_time
+                    if runtime.total_seconds() > 900:  # 15 دقيقة
+                        logger.info("🔄 إعادة تشغيل وقائية للحفاظ على الأداء")
                         try:
-                            context.close()
+                            self.context.close()
                         except:
                             pass
-                        context, page = self.create_railway_context(browser)
-                        self.consecutive_errors = 0
-                        self.stats['timeouts'] = 0
+                        self.context, page = self.create_stealth_context(browser)
+                        self.start_time = datetime.datetime.now()
+                        self._sync_ntp_time()  # إعادة مزامنة الوقت
                 
-                # إنهاء التشغيل
+                # النجاح - إغلاق نظيف
                 logger.info("\n" + "="*60)
-                if self.stats['success']:
-                    logger.info("🎊 المهمة مكتملة بنجاح!")
-                else:
-                    logger.info(f"⏹️ انتهى التشغيل بعد {cycle} دورات")
+                logger.info("🎊 المهمة مكتملة بنجاح!")
                 logger.info("="*60)
                 
-                # إغلاق نظيف
+                # إغلاق نهائي
                 try:
-                    context.close()
+                    self.context.close()
                     browser.close()
                 except:
                     pass
                 
-                return self.stats['success']
+                return True
                 
         except KeyboardInterrupt:
-            logger.info("\n🛑 تم إيقاف التشغيل بواسطة المستخدم")
+            logger.info("\n🛑 تم إوقف التشغيل بواسطة المستخدم")
             return False
             
         except Exception as e:
             logger.error(f"💀 خطأ حرج: {e}")
-            import traceback
-            traceback.print_exc()
+            logger.exception("تفاصيل الخطأ:")
             return False
-    
-    # ==================== الدوال المساعدة ====================
-    def get_operational_mode(self) -> str:
-        """تحديد نمط التشغيل"""
-        try:
-            now = datetime.datetime.now(self.timezone)
-            
-            if (now.hour == 1 and now.minute == 59 and now.second >= 50) or \
-               (now.hour == 2 and now.minute <= 10):
-                return "ASSAULT"
-            
-            elif now.hour == 1 and now.minute >= 45:
-                return "WARMUP"
-            
-            return "SCOUT"
-            
-        except Exception as e:
-            return "SCOUT"
-    
-    def calculate_delay(self) -> float:
-        """حساب التأخير"""
-        mode = self.get_operational_mode()
-        
-        if mode == "ASSAULT":
-            return random.uniform(0.05, 0.15)
-        
-        elif mode == "WARMUP":
-            return random.uniform(1.0, 2.0)
-        
-        else:
-            return random.uniform(30.0, 90.0)  # زيادة المهلة لـ Railway
-    
-    # ==================== نقطة الدخول الرئيسية ====================
+
     def run(self):
-        """نقطة الدخول الرئيسية (متوافقة مع Railway)"""
-        return self.run_railway_optimized()
+        """واجهة تشغيل متوافقة"""
+        return self.run_king_mode()
 
 
-# ==================== الدالة الرئيسية ====================
-def main():
-    """الدالة الرئيسية للتشغيل"""
+# ==================== نقطة الدخول الرئيسية ====================
+if __name__ == "__main__":
+    """
+    نقطة الدخول الرئيسية للبرنامج
+    الاستخدام: python king_sniper.py
+    """
+    
     print("="*60)
-    print("🎯 EliteSniper v10.1.0 - Railway Optimized")
+    print("👑 King Sniper v11.0.0 - نظام الحجز الدبلوماسي فائق السرعة")
+    print("="*60)
+    print("الميزات:")
+    print("  ⚡ الحقن المباشر للDOM (أسرع 100x)")
+    print("  ⏰ مزامنة NTP بدقة ±0.1 ثانية")
+    print("  🔄 إدارة جلسات ذكية مع Hard Reset")
+    print("  🔗 بناء روابط آمن مع urljoin")
     print("="*60)
     
     try:
-        sniper = EliteSniper()
+        sniper = KingSniper()
         success = sniper.run()
         
         if success:
             print("\n✅ التشغيل مكتمل بنجاح!")
-            return 0
+            sys.exit(0)
         else:
-            print("\n⏹️ انتهى التشغيل")
-            return 0  # إرجاع 0 حتى في حالة الفشل لعدم إعادة التشغيل المستمر
+            print("\n❌ انتهى التشغيل بدون نجاح")
+            sys.exit(1)
             
+    except KeyboardInterrupt:
+        print("\n🛑 تم إيقاف التشغيل بواسطة المستخدم")
+        sys.exit(0)
+        
     except Exception as e:
         print(f"\n💀 خطأ فادح: {e}")
         import traceback
         traceback.print_exc()
-        return 1  # إرجاع 1 لإعادة التشغيل في Railway
-
-if __name__ == "__main__":
-    sys.exit(main())
+        sys.exit(1)
