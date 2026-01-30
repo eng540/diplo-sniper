@@ -25,9 +25,9 @@ from playwright.sync_api import sync_playwright, Page, BrowserContext, Browser
 
 # ==================== IMPORTS الأساسية ====================
 try:
-    from .config import Config
-    from .captcha import CaptchaSolver
-    from .notifier import send_alert, send_photo, send_file
+    from src.config import Config
+    from src.captcha import CaptchaSolver
+    from src.notifier import send_alert, send_photo, send_file
     
     # التوافق مع send_document
     try:
