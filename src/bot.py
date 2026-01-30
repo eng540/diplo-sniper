@@ -4,9 +4,9 @@ import datetime
 import logging
 import pytz 
 from playwright.sync_api import sync_playwright
-from .config import Config
-from .captcha import CaptchaSolver
-from .notifier import send_alert, send_photo
+from src.config import Config
+from src.captcha import CaptchaSolver
+from src.notifier import send_alert, send_photo
 
 # ------------------------------------------------------------------
 # إعدادات السجل
