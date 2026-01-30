@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-📦 MAIN LAUNCHER - King Sniper v12.0.0
+📦 MAIN LAUNCHER - King Sniper v12.0.0 (Diplo-Sniper Edition)
 الإصدار: 1.0.0
-الوصف: ملف التشغيل الرئيسي مع Auto-Recovery وحماية متقدمة
+الوصف: ملف التشغيل الرئيسي متكامل مع نظام Diplo-Sniper الموجود
 المسار: src/main.py (بجانب bot.py في نفس المجلد)
 """
 
@@ -12,529 +12,532 @@ import time
 import logging
 import json
 import traceback
+import random
 from datetime import datetime
-from typing import Optional
+from typing import Optional, Dict, Any
 
 # ------------------------------------------------------------------------------
-# 1. إعداد المسارات (Path Setup)
-# حل مشكلة عدم التعرف على المجلدات عند التشغيل من خارج src
+# 1. إعداد المسارات (Path Setup) - متوافق مع هيكل Diplo-Sniper
 # ------------------------------------------------------------------------------
 current_dir = os.path.dirname(os.path.abspath(__file__))
 parent_dir = os.path.dirname(current_dir)
 src_dir = current_dir
 project_root = parent_dir
 
-# إضافة المسارات المطلوبة
+# إضافة المسارات المطلوبة لنظام Python
 sys.path.insert(0, src_dir)       # المجلد الحالي (src)
 sys.path.insert(0, project_root)  # المجلد الرئيسي
 
 # إنشاء المجلدات المطلوبة
 os.makedirs(os.path.join(project_root, "logs"), exist_ok=True)
-os.makedirs(os.path.join(project_root, "reports"), exist_ok=True)
-os.makedirs(os.path.join(project_root, "backups"), exist_ok=True)
+os.makedirs(os.path.join(project_root, "evidence"), exist_ok=True)
+os.makedirs(os.path.join(project_root, "crashes"), exist_ok=True)
 
-logger = logging.getLogger("KingSniperLauncher")
+logger = logging.getLogger("KingLauncher")
 
 # ------------------------------------------------------------------------------
-# 2. إعداد السجلات المتقدم (Advanced Logging)
+# 2. إعداد السجلات (Logging Configuration)
 # ------------------------------------------------------------------------------
 def setup_logging():
-    """إعداد نظام السجلات المتقدم"""
+    """إعداد نظام السجلات المتوافق مع Diplo-Sniper"""
     
-    # إنشاء formatters
-    console_format = logging.Formatter(
+    # Formatter للنظام الحالي
+    formatter = logging.Formatter(
         '%(asctime)s [%(levelname)s] %(message)s',
         datefmt='%H:%M:%S'
     )
     
-    file_format = logging.Formatter(
-        '%(asctime)s.%(msecs)03d [%(levelname)s] %(name)s: %(message)s',
-        datefmt='%Y-%m-%d %H:%M:%S'
-    )
-    
-    # Clear any existing handlers
-    logger.handlers.clear()
-    
     # Console Handler
     console_handler = logging.StreamHandler(sys.stdout)
-    console_handler.setFormatter(console_format)
+    console_handler.setFormatter(formatter)
     console_handler.setLevel(logging.INFO)
     
-    # File Handler (daily rotation)
-    log_file = os.path.join(project_root, "logs", f"launcher_{datetime.now().strftime('%Y%m%d')}.log")
+    # File Handler (يومي)
+    log_file = os.path.join(project_root, "logs", f"king_launcher_{datetime.now().strftime('%Y%m%d')}.log")
     file_handler = logging.FileHandler(log_file, encoding='utf-8')
-    file_handler.setFormatter(file_format)
+    file_handler.setFormatter(formatter)
     file_handler.setLevel(logging.DEBUG)
     
-    # Add handlers
+    # إعداد الـ Logger
+    logger.handlers.clear()
     logger.addHandler(console_handler)
     logger.addHandler(file_handler)
     logger.setLevel(logging.DEBUG)
-    
-    # Prevent propagation to root logger
     logger.propagate = False
     
     return log_file
 
 # ------------------------------------------------------------------------------
-# 3. فحص النظام (System Check)
+# 3. فحص النظام المتوافق مع Diplo-Sniper
 # ------------------------------------------------------------------------------
 def check_system_requirements() -> bool:
-    """فحص متطلبات النظام قبل التشغيل"""
+    """فحص متطلبات النظام لـ Diplo-Sniper"""
     
-    requirements = {
-        "Python Version": sys.version_info >= (3, 8),
-        "Project Root": os.path.exists(project_root),
-        "Config File": os.path.exists(os.path.join(src_dir, "config.py")),
-        "Bot File": os.path.exists(os.path.join(src_dir, "bot.py")),
+    # الملفات الأساسية المطلوبة
+    required_files = {
+        "config.py": os.path.join(src_dir, "config.py"),
+        "bot.py": os.path.join(src_dir, "bot.py"),
+        "notifier.py": os.path.join(src_dir, "notifier.py"),
+        "captcha.py": os.path.join(src_dir, "captcha.py"),
     }
     
-    logger.info("🔍 Checking System Requirements:")
+    logger.info("🔍 Diplo-Sniper System Check:")
     
+    # فحص الملفات
     all_ok = True
-    for req_name, req_met in requirements.items():
-        status = "✅" if req_met else "❌"
-        logger.info(f"   {status} {req_name}")
-        if not req_met:
+    for file_name, file_path in required_files.items():
+        exists = os.path.exists(file_path)
+        status = "✅" if exists else "❌"
+        logger.info(f"   {status} {file_name}")
+        
+        if not exists and file_name != "captcha.py":  # captcha.py قد يكون اختياري
             all_ok = False
+            if file_name == "config.py":
+                logger.error(f"      ملف config.py غير موجود! يجب إنشاؤه بناءً على config.example.py")
     
-    # فحص المكتبات
+    # فحص المكتبات الأساسية
     try:
-        import playwright
-        import pytz
-        import ntplib
-        logger.info("   ✅ Python Libraries (playwright, pytz, ntplib)")
-    except ImportError as e:
-        logger.error(f"   ❌ Missing Python Library: {e}")
+        import requests
+        logger.info("   ✅ requests library")
+    except ImportError:
+        logger.error("   ❌ مكتبة requests غير مثبتة. قم بتثبيتها: pip install requests")
         all_ok = False
     
-    # فحص Chrome/Chromium
     try:
         from playwright.sync_api import sync_playwright
+        logger.info("   ✅ playwright library")
+    except ImportError:
+        logger.error("   ❌ مكتبة playwright غير مثبتة. قم بتثبيتها: pip install playwright")
+        all_ok = False
+    
+    # فحص متصفح Chromium
+    try:
         with sync_playwright() as p:
-            # محاولة تشغيل متصفح
-            browser = p.chromium.launch(headless=True, timeout=5000)
+            browser = p.chromium.launch(headless=True, timeout=10000)
             browser.close()
-        logger.info("   ✅ Browser (Chromium) available")
+        logger.info("   ✅ Chromium browser")
     except Exception as e:
-        logger.warning(f"   ⚠️ Browser check failed: {e}")
-        logger.info("   ℹ️ Trying to install browser...")
+        logger.warning(f"   ⚠️ فشل تشغيل Chromium: {e}")
+        logger.info("   محاولة تثبيت المتصفح...")
         try:
-            os.system("playwright install chromium")
-            logger.info("   ✅ Browser installed successfully")
-        except:
-            logger.error("   ❌ Failed to install browser")
+            import subprocess
+            subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], check=True)
+            logger.info("   ✅ تم تثبيت Chromium بنجاح")
+        except Exception as install_error:
+            logger.error(f"   ❌ فشل تثبيت Chromium: {install_error}")
             all_ok = False
+    
+    # فحص تكوين التليجرام
+    try:
+        from config import Config
+        if hasattr(Config, 'TELEGRAM_TOKEN') and hasattr(Config, 'TELEGRAM_CHAT_ID'):
+            if Config.TELEGRAM_TOKEN and Config.TELEGRAM_CHAT_ID:
+                logger.info("   ✅ Telegram configuration")
+            else:
+                logger.warning("   ⚠️ إعدادات التليجرام غير مكتملة")
+        else:
+            logger.warning("   ⚠️ إعدادات التليجرام غير موجودة في config.py")
+    except ImportError:
+        logger.error("   ❌ لا يمكن قراءة ملف config.py")
+        all_ok = False
     
     return all_ok
 
 # ------------------------------------------------------------------------------
-# 4. Auto-Recovery System
+# 4. نظام الاسترداد الذكي (Smart Recovery System)
 # ------------------------------------------------------------------------------
-class RecoverySystem:
-    """نظام الاسترداد التلقائي المتقدم"""
+class DiploRecovery:
+    """نظام الاسترداد المتوافق مع Diplo-Sniper"""
     
     def __init__(self):
         self.crash_count = 0
-        self.max_crashes = 10
+        self.max_crashes = 15  # زيادة الحد للأمان
         self.crash_history = []
-        self.recovery_file = os.path.join(project_root, "backups", "recovery_state.json")
-        self.start_time = datetime.now()
+        self.session_start = datetime.now()
+        self.recovery_file = os.path.join(project_root, "crashes", "recovery.json")
         
-    def log_crash(self, exception: Exception, traceback_str: str):
+        # إنشاء مجلد الانهيارات
+        os.makedirs(os.path.join(project_root, "crashes"), exist_ok=True)
+    
+    def record_crash(self, error: Exception, trace: str):
         """تسجيل تفاصيل الانهيار"""
         crash_id = f"crash_{int(time.time())}"
         
         crash_info = {
             "id": crash_id,
             "timestamp": datetime.now().isoformat(),
-            "exception_type": type(exception).__name__,
-            "exception_message": str(exception),
-            "crash_count": self.crash_count,
-            "uptime_seconds": (datetime.now() - self.start_time).total_seconds()
+            "error_type": type(error).__name__,
+            "error_message": str(error),
+            "crash_number": self.crash_count + 1,
+            "session_duration": (datetime.now() - self.session_start).total_seconds()
         }
         
         self.crash_history.append(crash_info)
         self.crash_count += 1
         
         # حفظ في ملف
-        self._save_crash_report(crash_info, traceback_str)
+        self._save_crash_details(crash_info, trace)
         
         return crash_info
     
-    def _save_crash_report(self, crash_info: dict, traceback_str: str):
-        """حفظ تقرير الانهيار"""
-        report_dir = os.path.join(project_root, "reports", "crashes")
-        os.makedirs(report_dir, exist_ok=True)
+    def _save_crash_details(self, info: Dict[str, Any], trace: str):
+        """حفظ تفاصيل الانهيار"""
+        crash_dir = os.path.join(project_root, "crashes", info["id"])
+        os.makedirs(crash_dir, exist_ok=True)
         
-        report_file = os.path.join(report_dir, f"{crash_info['id']}.json")
+        # حفظ معلومات الانهيار
+        info_file = os.path.join(crash_dir, "crash_info.json")
+        with open(info_file, 'w', encoding='utf-8') as f:
+            json.dump(info, f, indent=2, ensure_ascii=False)
         
-        full_report = {
-            **crash_info,
-            "traceback": traceback_str,
-            "system_info": {
-                "python_version": sys.version,
-                "platform": sys.platform,
-                "current_directory": os.getcwd(),
-                "src_directory": src_dir
-            }
-        }
+        # حفظ الـ traceback
+        trace_file = os.path.join(crash_dir, "traceback.txt")
+        with open(trace_file, 'w', encoding='utf-8') as f:
+            f.write(trace)
         
-        try:
-            with open(report_file, 'w', encoding='utf-8') as f:
-                json.dump(full_report, f, indent=2, ensure_ascii=False)
-            
-            logger.info(f"📄 Crash report saved: {report_file}")
-        except Exception as e:
-            logger.error(f"❌ Failed to save crash report: {e}")
+        logger.info(f"📄 تم حفظ تفاصيل الانهيار: {crash_dir}")
     
     def should_recover(self) -> bool:
-        """تحديد ما إذا كان يجب محاولة الاسترداد"""
+        """تحديد ما إذا كان يجب الاستمرار في المحاولات"""
         if self.crash_count >= self.max_crashes:
-            logger.critical(f"💥 Maximum crashes reached ({self.max_crashes}). Shutting down.")
+            logger.critical(f"💥 وصل للحد الأقصى من الانهيارات ({self.max_crashes})")
             return False
         
-        # إذا كانت الانهيارات متتالية بسرعة كبيرة
+        # تحقق من الانهيارات السريعة المتتالية
         if self.crash_count >= 3:
-            recent_crashes = self.crash_history[-3:]
-            time_diffs = []
+            recent = self.crash_history[-3:]
+            times = [datetime.fromisoformat(c["timestamp"]) for c in recent]
             
-            for i in range(1, len(recent_crashes)):
-                t1 = datetime.fromisoformat(recent_crashes[i-1]["timestamp"])
-                t2 = datetime.fromisoformat(recent_crashes[i]["timestamp"])
-                time_diffs.append((t2 - t1).total_seconds())
-            
-            if len(time_diffs) >= 2 and all(t < 30 for t in time_diffs):
-                logger.critical("⚡ Rapid consecutive crashes detected. Emergency shutdown.")
+            # إذا كانت الانهيارات في أقل من دقيقة
+            time_diffs = [(times[i] - times[i-1]).total_seconds() for i in range(1, len(times))]
+            if len(time_diffs) >= 2 and all(t < 60 for t in time_diffs):
+                logger.critical("⚡ اكتشاف انهيارات سريعة متتالية!")
                 return False
         
         return True
     
-    def calculate_wait_time(self) -> float:
-        """حساب وقت الانتظار قبل إعادة المحاولة"""
-        base_wait = 10  # 10 ثواني أساسية
+    def get_wait_time(self) -> float:
+        """حساب وقت الانتظار قبل إعادة التشغيل"""
+        # وقت أساسي مع زيادة تدريجية
+        base_time = 10
         
-        # زيادة وقت الانتظار مع زيادة الانهيارات
         if self.crash_count > 3:
-            base_wait = 30
+            base_time = 30
         
         if self.crash_count > 6:
-            base_wait = 60
+            base_time = 60
         
-        if self.crash_count > 8:
-            base_wait = 120
+        if self.crash_count > 9:
+            base_time = 120
+        
+        if self.crash_count > 12:
+            base_time = 300  # 5 دقائق
         
         # إضافة عشوائية لمنع الأنماط
-        random_factor = random.uniform(0.8, 1.2)
+        random_factor = random.uniform(0.9, 1.1)
         
-        return base_wait * random_factor
+        return base_time * random_factor
     
-    def get_recovery_stats(self) -> dict:
+    def get_stats(self) -> Dict[str, Any]:
         """الحصول على إحصائيات الاسترداد"""
         return {
             "total_crashes": self.crash_count,
-            "max_crashes": self.max_crashes,
-            "crash_history": [c["exception_type"] for c in self.crash_history[-5:]],
-            "first_crash": self.crash_history[0]["timestamp"] if self.crash_history else None,
-            "uptime": (datetime.now() - self.start_time).total_seconds()
+            "max_allowed": self.max_crashes,
+            "remaining_attempts": self.max_crashes - self.crash_count,
+            "session_duration": (datetime.now() - self.session_start).total_seconds(),
+            "last_errors": [c["error_type"] for c in self.crash_history[-3:]]
         }
 
 # ------------------------------------------------------------------------------
-# 5. نظام المراقبة (Monitoring System)
+# 5. محمل البوت الديناميكي
 # ------------------------------------------------------------------------------
-class SystemMonitor:
-    """مراقبة أداء النظام والموارد"""
+def load_diplo_bot():
+    """
+    تحميل البوت ديناميكياً مع دعم الأسماء المختلفة
+    """
+    
+    # قائمة بالملفات المحتملة
+    possible_files = [
+        "bot.py",           # الاسم الافتراضي
+        "king_sniper.py",   # النسخة المحسنة
+        "elite_sniper.py",  # النسخة الأصلية
+        "sniper.py",        # اسم مختصر
+    ]
+    
+    # قائمة بالأسماء المحتملة للكلاسات
+    possible_classes = [
+        "EliteSniper",      # من bot.py
+        "KingSniperV12",    # النسخة المحسنة
+        "KingSniper",       # النسخة الملكية
+        "DiploSniper",      # اسم بديل
+        "SniperBot",        # اسم عام
+    ]
+    
+    for file_name in possible_files:
+        file_path = os.path.join(src_dir, file_name)
+        
+        if not os.path.exists(file_path):
+            continue
+        
+        try:
+            # استيراد الملف كوحدة
+            module_name = file_name[:-3]  # إزالة .py
+            module = __import__(module_name)
+            
+            # البحث عن الكلاس المناسب
+            for class_name in possible_classes:
+                if hasattr(module, class_name):
+                    logger.info(f"✅ تم تحميل {file_name} -> {class_name}")
+                    return getattr(module, class_name)
+            
+        except ImportError as e:
+            logger.debug(f"فشل تحميل {file_name}: {e}")
+            continue
+        except Exception as e:
+            logger.debug(f"خطأ في {file_name}: {e}")
+            continue
+    
+    # إذا وصلنا هنا، لم يتم تحميل أي شيء
+    raise ImportError("لم يتم العثور على أي ملف بوت صالح. تأكد من وجود bot.py في مجلد src/")
+
+# ------------------------------------------------------------------------------
+# 6. نظام المراقبة الذكي
+# ------------------------------------------------------------------------------
+class SystemWatcher:
+    """مراقب أداء النظام"""
     
     def __init__(self):
-        self.metrics = {
-            "start_time": datetime.now(),
-            "cycles_completed": 0,
-            "total_runtime": 0,
-            "peak_memory": 0,
-            "exceptions_count": 0
-        }
+        self.start_time = datetime.now()
+        self.cycles = 0
+        self.total_runtime = 0
         
-    def log_cycle_start(self):
-        """تسجيل بداية دورة جديدة"""
-        self.metrics["cycles_completed"] += 1
-        self.cycle_start_time = datetime.now()
-        
-    def log_cycle_end(self):
-        """تسجيل نهاية دورة"""
-        if hasattr(self, 'cycle_start_time'):
-            cycle_time = (datetime.now() - self.cycle_start_time).total_seconds()
-            self.metrics["total_runtime"] += cycle_time
-            
-            logger.debug(f"⏱️ Cycle {self.metrics['cycles_completed']} completed in {cycle_time:.1f}s")
+    def start_cycle(self):
+        """بدء دورة جديدة"""
+        self.cycle_start = datetime.now()
+        self.cycles += 1
     
-    def check_resources(self) -> bool:
-        """فحص موارد النظام"""
+    def end_cycle(self):
+        """إنهاء الدورة الحالية"""
+        if hasattr(self, 'cycle_start'):
+            duration = (datetime.now() - self.cycle_start).total_seconds()
+            self.total_runtime += duration
+    
+    def check_health(self) -> bool:
+        """فحص صحة النظام"""
         try:
-            import psutil
-            
             # فحص استخدام الذاكرة
+            import psutil
             process = psutil.Process(os.getpid())
             memory_mb = process.memory_info().rss / 1024 / 1024
             
-            if memory_mb > self.metrics["peak_memory"]:
-                self.metrics["peak_memory"] = memory_mb
-            
-            # فحص استخدام CPU
-            cpu_percent = psutil.cpu_percent(interval=0.1)
-            
-            # فحص مساحة التخزين
-            disk_usage = psutil.disk_usage(project_root)
-            disk_free_gb = disk_usage.free / (1024**3)
-            
-            # تحذير إذا كانت الموارد منخفضة
-            warnings = []
-            
-            if memory_mb > 500:  # أكثر من 500MB
-                warnings.append(f"High memory usage: {memory_mb:.1f}MB")
-            
-            if cpu_percent > 80:  # أكثر من 80%
-                warnings.append(f"High CPU usage: {cpu_percent:.1f}%")
-            
-            if disk_free_gb < 1:  # أقل من 1GB حر
-                warnings.append(f"Low disk space: {disk_free_gb:.1f}GB free")
-            
-            if warnings:
-                logger.warning(f"⚠️ Resource warnings: {', '.join(warnings)}")
+            if memory_mb > 1000:  # أكثر من 1GB
+                logger.warning(f"⚠️ استخدام ذاكرة عالي: {memory_mb:.1f}MB")
                 return False
             
             return True
             
         except ImportError:
-            # psutil غير مثبت، تخطي فحص الموارد
+            # psutil غير مثبت، تجاهل الفحص
             return True
         except Exception as e:
-            logger.debug(f"Resource check skipped: {e}")
+            logger.debug(f"تخطي فحص الصحة: {e}")
             return True
     
-    def generate_report(self) -> dict:
-        """توليد تقرير المراقبة"""
-        uptime = (datetime.now() - self.metrics["start_time"]).total_seconds()
+    def get_report(self) -> Dict[str, Any]:
+        """تقرير عن أداء النظام"""
+        uptime = (datetime.now() - self.start_time).total_seconds()
         
-        report = {
-            **self.metrics,
-            "uptime_seconds": uptime,
-            "uptime_human": self._format_time(uptime),
-            "average_cycle_time": self.metrics["total_runtime"] / max(self.metrics["cycles_completed"], 1),
-            "report_time": datetime.now().isoformat()
+        return {
+            "session_start": self.start_time.isoformat(),
+            "total_cycles": self.cycles,
+            "total_runtime_seconds": self.total_runtime,
+            "session_uptime_seconds": uptime,
+            "average_cycle_time": self.total_runtime / max(self.cycles, 1)
         }
-        
-        return report
-    
-    def _format_time(self, seconds: float) -> str:
-        """تنسيق الوقت لصيغة مقروءة"""
-        hours = int(seconds // 3600)
-        minutes = int((seconds % 3600) // 60)
-        secs = int(seconds % 60)
-        
-        if hours > 0:
-            return f"{hours}h {minutes}m {secs}s"
-        elif minutes > 0:
-            return f"{minutes}m {secs}s"
-        else:
-            return f"{secs}s"
 
 # ------------------------------------------------------------------------------
-# 6. Dynamic Bot Loader
+# 7. الإجراءات عند النجاح
 # ------------------------------------------------------------------------------
-def load_bot_module():
-    """تحميل وحدة البوت ديناميكياً مع دعم متعدد"""
-    
-    bot_modules_to_try = [
-        "bot",              # الافتراضي: bot.py
-        "king_sniper_v12",  # النسخة المحسنة
-        "elite_sniper",     # أسماء بديلة
-        "sniper"            # أسماء بديلة
-    ]
-    
-    bot_classes_to_try = [
-        "EliteSniper",      # الافتراضي
-        "KingSniperV12",    # النسخة المحسنة
-        "KingSniper",       # أسماء بديلة
-        "SniperBot"         # أسماء بديلة
-    ]
-    
-    loaded_module = None
-    loaded_class = None
-    
-    for module_name in bot_modules_to_try:
-        try:
-            module_path = os.path.join(src_dir, f"{module_name}.py")
-            if not os.path.exists(module_path):
-                continue
-            
-            # استيراد الديناميكي
-            module = __import__(module_name)
-            loaded_module = module_name
-            
-            # البحث عن الكلاس المناسب
-            for class_name in bot_classes_to_try:
-                if hasattr(module, class_name):
-                    loaded_class = getattr(module, class_name)
-                    logger.info(f"✅ Loaded: {module_name}.{class_name}")
-                    return loaded_class
-            
-        except ImportError as e:
-            continue
-        except Exception as e:
-            logger.debug(f"Failed to load {module_name}: {e}")
-            continue
-    
-    # إذا لم يتم تحميل أي شيء
-    raise ImportError(f"No valid bot module found. Tried: {', '.join(bot_modules_to_try)}")
+def handle_success(session_data: Dict[str, Any]):
+    """معالجة النجاح وإرسال التقارير"""
+    try:
+        from notifier import send_alert, send_file
+        
+        # إرسال تنبيه النجاح
+        success_msg = f"""
+🎉 نجاح الحجز! - King Sniper v12
+
+📋 جلسة: {session_data.get('session_id', 'N/A')}
+⏰ مدة التشغيل: {session_data.get('uptime_seconds', 0):.0f} ثانية
+🔄 عدد الدورات: {session_data.get('cycles', 0)}
+📊 الحالات: {session_data.get('state_changes', 0)}
+
+🏆 المهمة مكتملة بنجاح!
+        """
+        
+        send_alert(success_msg.strip())
+        
+        # إرسال ملف السجلات إذا كان موجوداً
+        log_file = os.path.join(project_root, "logs", f"king_launcher_{datetime.now().strftime('%Y%m%d')}.log")
+        if os.path.exists(log_file):
+            send_file(log_file, "📋 سجلات التشغيل الكاملة")
+        
+        logger.info("✅ تم إرسال تقارير النجاح")
+        
+    except Exception as e:
+        logger.error(f"❌ خطأ في إرسال تقارير النجاح: {e}")
 
 # ------------------------------------------------------------------------------
-# 7. الدالة الرئيسية للتشغيل
+# 8. الدالة الرئيسية للتشغيل
 # ------------------------------------------------------------------------------
-def run_king_unit():
+def launch_diplo_sniper():
     """
-    تقوم بتشغيل البوت داخل حلقة حماية متقدمة
-    مع Auto-Recovery ومراقبة الموارد
+    الدالة الرئيسية لتشغيل Diplo-Sniper مع نظام استرداد ذكي
     """
     
     # إعداد السجلات
     log_file = setup_logging()
     
-    # عرض معلومات البدء
+    # شاشة البدء
     logger.info("=" * 60)
-    logger.info("👑 KING SNIPER LAUNCHER v1.0.0")
+    logger.info("👑 DIPLO-SNIPER KING LAUNCHER v12.0.0")
     logger.info("=" * 60)
-    logger.info(f"📂 Project Root: {project_root}")
-    logger.info(f"📁 Source Directory: {src_dir}")
-    logger.info(f"📝 Log File: {log_file}")
+    logger.info(f"📁 المسار الرئيسي: {project_root}")
+    logger.info(f"📂 مجلد المصادر: {src_dir}")
+    logger.info(f"📝 ملف السجلات: {log_file}")
     logger.info("=" * 60)
     
     # فحص النظام
     if not check_system_requirements():
-        logger.critical("❌ System requirements check failed. Exiting.")
+        logger.critical("❌ فشل فحص النظام. الخروج...")
         sys.exit(1)
     
-    # تهيئة أنظمة الدعم
-    recovery = RecoverySystem()
-    monitor = SystemMonitor()
+    # تهيئة الأنظمة المساعدة
+    recovery = DiploRecovery()
+    watcher = SystemWatcher()
     
     # تحميل البوت
     try:
-        BotClass = load_bot_module()
+        BotClass = load_diplo_bot()
     except ImportError as e:
-        logger.critical(f"❌ Failed to load bot module: {e}")
-        logger.info("💡 Make sure bot.py exists in src/ with class EliteSniper")
+        logger.critical(f"❌ فشل تحميل البوت: {e}")
+        logger.info("💡 تأكد من وجود ملف bot.py في مجلد src/ يحتوي على class EliteSniper")
         sys.exit(1)
     
     # الحلقة الرئيسية
     while True:
         try:
-            monitor.log_cycle_start()
+            watcher.start_cycle()
             
-            logger.info("🚀 LAUNCHING KING SNIPER PROTOCOL...")
-            logger.info(f"📊 Recovery Stats: {recovery.get_recovery_stats()}")
+            logger.info("🚀 بدء تشغيل بروتوكول Diplo-Sniper...")
             
-            # فحص الموارد قبل البدء
-            if not monitor.check_resources():
-                logger.warning("⚠️ Resource check failed, delaying launch...")
-                time.sleep(10)
+            # عرض إحصائيات الاسترداد
+            stats = recovery.get_stats()
+            logger.info(f"📊 إحصائيات: {stats['total_crashes']} انهيارات، {stats['remaining_attempts']} محاولات متبقية")
+            
+            # فحص صحة النظام
+            if not watcher.check_health():
+                logger.warning("⚠️ فحص الصحة فشل، تأخير التشغيل...")
+                time.sleep(30)
                 continue
             
             # تهيئة وتشغيل البوت
-            logger.info("🎯 Initializing Sniper Core...")
+            logger.info("🎯 تهيئة نواة Sniper...")
             bot_instance = BotClass()
             
-            logger.info("▶️ Starting Execution...")
+            logger.info("▶️ بدء التنفيذ...")
             success = bot_instance.run()
             
             # تسجيل نهاية الدورة
-            monitor.log_cycle_end()
+            watcher.end_cycle()
             
             if success:
-                logger.info("🏆 MISSION ACCOMPLISHED - Booking Successful!")
+                logger.info("🏆 إنجاز المهمة - نجاح الحجز!")
                 
-                # توليد التقارير النهائية
-                final_report = monitor.generate_report()
-                logger.info(f"📊 Final Report: {json.dumps(final_report, indent=2)}")
+                # توليد تقرير النجاح
+                session_report = watcher.get_report()
+                session_report["session_id"] = getattr(bot_instance, 'session_id', 'unknown')
+                session_report["success"] = True
                 
+                # معالجة النجاح
+                handle_success(session_report)
+                
+                # حفظ التقرير النهائي
+                final_report_file = os.path.join(project_root, "logs", "final_success.json")
+                with open(final_report_file, 'w', encoding='utf-8') as f:
+                    json.dump(session_report, f, indent=2, ensure_ascii=False)
+                
+                logger.info(f"📄 تم حفظ التقرير النهائي: {final_report_file}")
                 break  # الخروج من الحلقة بنجاح
-            else:
-                logger.warning("⚠️ Mission ended without booking success")
                 
-                # الاستمرار في المحاولة (ما لم يكن هناك أمر بالتوقف)
+            else:
+                logger.warning("⚠️ انتهت المهمة بدون نجاح الحجز")
+                watcher.end_cycle()
                 continue
-            
+                
         except KeyboardInterrupt:
-            logger.info("🛑 MANUAL SHUTDOWN REQUESTED")
+            logger.info("🛑 طلب إيقاف يدوي")
             
-            # حفظ تقرير نهائي
-            final_report = monitor.generate_report()
-            logger.info(f"📊 Session Report: {json.dumps(final_report, indent=2)}")
+            # حفظ تقرير الجلسة
+            session_report = watcher.get_report()
+            session_report["stopped_by_user"] = True
+            
+            report_file = os.path.join(project_root, "logs", "user_stopped.json")
+            with open(report_file, 'w', encoding='utf-8') as f:
+                json.dump(session_report, f, indent=2, ensure_ascii=False)
             
             sys.exit(0)
             
         except SystemExit as e:
-            # خروج نظامي
-            logger.info(f"🛑 System Exit: {e}")
+            logger.info(f"🛑 خروج نظامي: {e}")
             sys.exit(e.code)
             
         except Exception as e:
             # معالجة الانهيار
-            traceback_str = traceback.format_exc()
-            crash_info = recovery.log_crash(e, traceback_str)
+            trace_str = traceback.format_exc()
+            crash_info = recovery.record_crash(e, trace_str)
             
-            monitor.log_cycle_end()
-            monitor.metrics["exceptions_count"] += 1
+            watcher.end_cycle()
             
-            logger.error(f"💥 SYSTEM CRASH (#{crash_info['crash_count']})")
-            logger.error(f"📛 Type: {crash_info['exception_type']}")
-            logger.error(f"📛 Message: {crash_info['exception_message']}")
-            logger.debug(f"📋 Traceback:\n{traceback_str}")
+            logger.error(f"💥 انهيار النظام (#{crash_info['crash_number']})")
+            logger.error(f"📛 النوع: {crash_info['error_type']}")
+            logger.error(f"📛 الرسالة: {crash_info['error_message']}")
             
-            # تحديد ما إذا كان يجب الاسترداد
+            # التحقق مما إذا كان يجب الاستمرار
             if not recovery.should_recover():
-                logger.critical("💀 MAXIMUM RECOVERY ATTEMPTS REACHED - SHUTTING DOWN")
+                logger.critical("💀 وصل للحد الأقصى من محاولات الاسترداد")
                 
-                # تقرير نهائي
-                final_report = monitor.generate_report()
-                crash_report = {
-                    **final_report,
+                # تقرير فشل نهائي
+                failure_report = {
+                    **watcher.get_report(),
                     "crash_history": recovery.crash_history,
-                    "total_crashes": recovery.crash_count
+                    "total_crashes": recovery.crash_count,
+                    "final_status": "MAX_CRASHES_REACHED"
                 }
                 
-                # حفظ تقرير الانهيار النهائي
-                crash_file = os.path.join(project_root, "reports", "final_crash_report.json")
-                with open(crash_file, 'w', encoding='utf-8') as f:
-                    json.dump(crash_report, f, indent=2, ensure_ascii=False)
+                failure_file = os.path.join(project_root, "crashes", "final_failure.json")
+                with open(failure_file, 'w', encoding='utf-8') as f:
+                    json.dump(failure_report, f, indent=2, ensure_ascii=False)
                 
-                logger.info(f"📄 Final crash report saved: {crash_file}")
+                logger.info(f"📄 تقرير الفشل النهائي: {failure_file}")
                 sys.exit(1)
             
-            # حساب وقت الانتظار وإعادة التشغيل
-            wait_time = recovery.calculate_wait_time()
-            logger.info(f"♻️ Auto-Recovery in {wait_time:.1f} seconds...")
+            # حساب وقت الانتظار
+            wait_time = recovery.get_wait_time()
+            logger.info(f"♻️ استرداد تلقائي خلال {wait_time:.1f} ثانية...")
             
-            # عرض إحصائيات
-            stats = recovery.get_recovery_stats()
-            logger.info(f"📈 Recovery Stats: {stats['total_crashes']}/{stats['max_crashes']} crashes")
+            # عرض العد التنازلي
+            for remaining in range(int(wait_time), 0, -5):
+                if remaining % 30 == 0 or remaining <= 10:
+                    logger.info(f"⏳ متبقي: {remaining} ثانية")
+                time.sleep(5)
             
-            # الانتظار قبل إعادة المحاولة
-            for i in range(int(wait_time)):
-                if i % 5 == 0:  # تحديث كل 5 ثواني
-                    remaining = wait_time - i
-                    logger.info(f"⏳ Waiting... {remaining:.0f}s remaining")
-                time.sleep(1)
-            
-            logger.info("🔄 RESTARTING SYSTEM...")
+            logger.info("🔄 إعادة تشغيل النظام...")
             continue
 
 # ------------------------------------------------------------------------------
-# 8. نقطة الدخول (Entry Point)
+# 9. نقطة الدخول الرئيسية
 # ------------------------------------------------------------------------------
 if __name__ == "__main__":
-    # تهيئة عشوائية
-    import random
-    random.seed()
-    
     # بدء التشغيل
-    run_king_unit()
+    launch_diplo_sniper()
